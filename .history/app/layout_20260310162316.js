@@ -1,0 +1,1 @@
+${is_expanded ? 'w-57.5 items-start' : 'w-18 items-center'}  

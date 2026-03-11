@@ -1,0 +1,64 @@
+@import "tailwindcss";
+
+:root {
+  --background: #ffffff;
+  --foreground: #171717;
+  --color-primary: #0F172B;
+  --color-secondary: #164A6E;
+  --color-tertiary: #2C5A6E;
+  --color-accent: #00B8DB;
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --font-sans: var(--font-geist-sans);
+  --font-mono: var(--font-geist-mono);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --background: #0a0a0a;
+    --foreground: #ededed;
+  }
+}
+
+body {
+  background: var(--background);
+  color: var(--foreground);
+  font-family: 'Poppins', Arial, Helvetica, sans-serif;
+  margin: 0;
+  padding: 0;
+  overflow-x: hidden;
+}
+
+/* Custom utility classes */
+.h-15 {
+  height: 3.75rem; /* 60px */
+}
+
+.mt-15 {
+  margin-top: 3.75rem; /* 60px */
+}
+
+.w-13 {
+  width: 3.25rem; /* 52px */
+}
+
+.h-13 {
+  height: 3.25rem; /* 52px */
+}
+
+/* Fix for fixed positioning */
+.fixed {
+  position: fixed;
+}
+
+/* Ensure z-index works properly */
+.z-50 {
+  z-index: 50;
+}
+
+.z-40 {
+  z-index: 40;
+}

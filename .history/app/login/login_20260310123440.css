@@ -1,0 +1,505 @@
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+}
+
+body {
+    font-family: 'Inter', sans-serif;
+    overflow: hidden;
+}
+
+.login-container {
+    min-height: 100vh;
+    width: 100%;
+    position: relative;
+    background: #0F172B;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    overflow: hidden;
+}
+
+/* Gradient Background - Reduced blue */
+.gradient-bg {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    z-index: 1;
+}
+
+.gradient-orb {
+    position: absolute;
+    border-radius: 50%;
+    filter: blur(80px);
+    opacity: 0.1;
+}
+
+.orb-1 {
+    top: -10%;
+    right: -5%;
+    width: 500px;
+    height: 500px;
+    background: #FFFFFF;
+    opacity: 0.05;
+}
+
+.orb-2 {
+    bottom: -10%;
+    left: -5%;
+    width: 400px;
+    height: 400px;
+    background: #FFFFFF;
+    opacity: 0.03;
+}
+
+.orb-3 {
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    width: 600px;
+    height: 600px;
+    background: #FFFFFF;
+    opacity: 0.02;
+}
+
+/* Wave Pattern Overlay */
+.pattern-overlay {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background-image: 
+        repeating-linear-gradient(45deg, rgba(255, 255, 255, 0.02) 0px, rgba(255, 255, 255, 0.02) 2px, transparent 2px, transparent 10px),
+        repeating-linear-gradient(135deg, rgba(255, 255, 255, 0.02) 0px, rgba(255, 255, 255, 0.02) 2px, transparent 2px, transparent 10px);
+    background-size: 20px 20px;
+    z-index: 2;
+    opacity: 0.3;
+}
+
+/* Wave Design Elements */
+.wave-design {
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    width: 100%;
+    height: 150px;
+    z-index: 3;
+    pointer-events: none;
+}
+
+.wave {
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    width: 100%;
+    height: 100px;
+    background: linear-gradient(transparent 0%, rgba(0, 184, 219, 0.1) 50%, rgba(0, 184, 219, 0.2) 100%);
+    clip-path: url(#waveClip);
+}
+
+.wave-svg {
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    width: 100%;
+    height: 120px;
+}
+
+.wave-svg svg {
+    width: 100%;
+    height: 100%;
+}
+
+.container {
+    width: 1000px; /* Made smaller */
+    max-width: 85%; /* Adjusted */
+    height: 600px; /* Made smaller */
+    background: rgba(255, 255, 255, 0.03);
+    backdrop-filter: blur(10px);
+    border-radius: 30px; /* Slightly smaller radius */
+    display: flex;
+    overflow: hidden;
+    box-shadow: 0 20px 40px -12px rgba(0, 0, 0, 0.5);
+    border: 1px solid rgba(255, 255, 255, 0.05);
+    z-index: 10;
+    position: relative;
+}
+
+/* Left Panel */
+.left-panel {
+    width: 45%;
+    background: linear-gradient(135deg, rgba(0, 184, 219, 0.05) 0%, rgba(15, 23, 43, 0) 100%);
+    padding: 40px 30px; /* Reduced padding */
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-right: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.brand-content {
+    text-align: center;
+    max-width: 350px; /* Smaller */
+}
+
+.logo-container {
+    margin-bottom: 20px; /* Reduced */
+    display: flex;
+    justify-content: center;
+}
+
+.logo-circle {
+    width: 90px; /* Smaller */
+    height: 90px; /* Smaller */
+    border-radius: 50%;
+    background: linear-gradient(135deg, #00B8DB 0%, #0F172B 100%);
+    padding: 2px; /* Smaller */
+}
+
+.logo-wrapper {
+    width: 100%;
+    height: 100%;
+    border-radius: 50%;
+    overflow: hidden;
+    background: #0F172B;
+}
+
+.brand-name {
+    color: #FFFFFF;
+    font-size: 18px; /* Made smaller */
+    font-weight: 600;
+    line-height: 1.4;
+    margin-bottom: 30px; /* Reduced */
+    text-shadow: 0 2px 8px rgba(0, 184, 219, 0.2);
+    max-width: 280px;
+    margin-left: auto;
+    margin-right: auto;
+}
+
+/* Sea & River View Title */
+.sea-river-title {
+    color: #00B8DB;
+    font-size: 14px; /* Smaller */
+    font-weight: 500;
+    letter-spacing: 1px;
+    text-transform: uppercase;
+    margin-bottom: 5px;
+    opacity: 0.8;
+}
+
+.features-simple {
+    display: flex;
+    justify-content: center;
+    gap: 30px; /* Reduced gap */
+}
+
+.feature-item {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 5px; /* Reduced */
+    color: rgba(255, 255, 255, 0.7);
+    font-size: 12px; /* Smaller */
+}
+
+.feature-item i {
+    font-size: 20px; /* Smaller */
+    color: #00B8DB;
+    margin-bottom: 3px; /* Reduced */
+}
+
+/* Right Panel */
+.right-panel {
+    width: 55%;
+    padding: 40px; /* Reduced padding */
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: rgba(255, 255, 255, 0.02);
+}
+
+.login-box {
+    width: 100%;
+    max-width: 360px; /* Smaller */
+}
+
+.login-header {
+    margin-bottom: 25px; /* Reduced */
+    text-align: center;
+}
+
+.welcome-title {
+    color: #FFFFFF;
+    font-size: 32px; /* Smaller */
+    font-weight: 700;
+    margin-bottom: 5px;
+    letter-spacing: -0.5px;
+}
+
+.login-header h2 {
+    color: rgba(255, 255, 255, 0.5);
+    font-size: 14px; /* Smaller */
+    font-weight: 400;
+}
+
+/* User Type Selector - Centered */
+.user-type-selector {
+    display: flex;
+    gap: 12px; /* Reduced */
+    margin-bottom: 15px; /* Reduced */
+    justify-content: center;
+}
+
+.user-type-btn {
+    flex: 0 1 auto; /* Auto width */
+    min-width: 100px; /* Fixed minimum width */
+    padding: 10px; /* Smaller */
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 10px; /* Smaller */
+    color: rgba(255, 255, 255, 0.6);
+    font-size: 13px; /* Smaller */
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 0.3s ease;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px; /* Reduced */
+}
+
+.user-type-btn i {
+    font-size: 14px; /* Smaller */
+}
+
+.user-type-btn.active {
+    background: #00B8DB;
+    border-color: #00B8DB;
+    color: #FFFFFF;
+    box-shadow: 0 8px 16px -8px rgba(0, 184, 219, 0.5);
+}
+
+/* Role Badge - Centered */
+.role-badge {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    padding: 6px 14px; /* Smaller */
+    background: rgba(255, 255, 255, 0.05);
+    border-radius: 30px;
+    margin-bottom: 20px; /* Reduced */
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    width: fit-content;
+    margin-left: auto;
+    margin-right: auto;
+}
+
+.role-badge i {
+    color: #00B8DB;
+    font-size: 13px; /* Smaller */
+}
+
+.role-badge span {
+    color: rgba(255, 255, 255, 0.9);
+    font-size: 12px; /* Smaller */
+    font-weight: 500;
+}
+
+/* Error Message */
+.error-message {
+    background: rgba(255, 87, 87, 0.1);
+    border: 1px solid rgba(255, 87, 87, 0.2);
+    border-radius: 10px; /* Smaller */
+    padding: 10px 14px; /* Smaller */
+    margin-bottom: 15px; /* Reduced */
+    display: flex;
+    align-items: center;
+    gap: 8px; /* Reduced */
+    color: #ff5757;
+    font-size: 13px; /* Smaller */
+}
+
+.error-message i {
+    font-size: 14px; /* Smaller */
+}
+
+/* Form */
+form {
+    width: 100%;
+}
+
+.input-group {
+    position: relative;
+    margin-bottom: 12px; /* Reduced */
+}
+
+.input-icon {
+    position: absolute;
+    left: 14px; /* Adjusted */
+    top: 50%;
+    transform: translateY(-50%);
+    color: rgba(255, 255, 255, 0.4);
+    font-size: 14px; /* Smaller */
+    z-index: 1;
+}
+
+.input-group input {
+    width: 100%;
+    padding: 14px 40px 14px 40px; /* Smaller padding */
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 10px; /* Smaller */
+    color: #FFFFFF;
+    font-size: 13px; /* Smaller */
+    transition: all 0.3s ease;
+}
+
+.input-group input:focus {
+    outline: none;
+    border-color: #00B8DB;
+    background: rgba(255, 255, 255, 0.1);
+    box-shadow: 0 0 0 3px rgba(0, 184, 219, 0.1); /* Smaller */
+}
+
+.input-group input::placeholder {
+    color: rgba(255, 255, 255, 0.3);
+}
+
+.password-toggle {
+    position: absolute;
+    right: 14px; /* Adjusted */
+    top: 50%;
+    transform: translateY(-50%);
+    background: none;
+    border: none;
+    color: rgba(255, 255, 255, 0.4);
+    cursor: pointer;
+    font-size: 14px; /* Smaller */
+    z-index: 1;
+}
+
+.password-toggle:hover {
+    color: #00B8DB;
+}
+
+/* Form Options */
+.form-options {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin: 12px 0 20px; /* Reduced */
+}
+
+.remember-me {
+    display: flex;
+    align-items: center;
+    gap: 6px; /* Reduced */
+    color: rgba(255, 255, 255, 0.6);
+    font-size: 13px; /* Smaller */
+    cursor: pointer;
+}
+
+.remember-me input[type="checkbox"] {
+    width: 14px; /* Smaller */
+    height: 14px; /* Smaller */
+    accent-color: #00B8DB;
+}
+
+.forgot-password {
+    color: #00B8DB;
+    font-size: 13px; /* Smaller */
+    text-decoration: none;
+    transition: all 0.3s ease;
+}
+
+.forgot-password:hover {
+    text-decoration: underline;
+}
+
+/* Login Button */
+.login-button {
+    width: 100%;
+    padding: 14px; /* Smaller */
+    background: linear-gradient(135deg, #00B8DB 0%, #0F172B 100%);
+    border: none;
+    border-radius: 10px; /* Smaller */
+    color: #FFFFFF;
+    font-size: 14px; /* Smaller */
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.3s ease;
+    margin-bottom: 15px; /* Reduced */
+}
+
+.login-button:hover:not(:disabled) {
+    transform: translateY(-2px);
+    box-shadow: 0 8px 20px -5px rgba(0, 184, 219, 0.4);
+}
+
+.login-button:disabled {
+    opacity: 0.7;
+    cursor: not-allowed;
+}
+
+/* Staff Note */
+.staff-note {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px; /* Reduced */
+    padding: 10px 14px; /* Smaller */
+    background: rgba(255, 255, 255, 0.03);
+    border-radius: 8px; /* Smaller */
+    margin-bottom: 15px; /* Reduced */
+}
+
+.staff-note i {
+    color: #00B8DB;
+    font-size: 13px; /* Smaller */
+}
+
+.staff-note span {
+    color: rgba(255, 255, 255, 0.5);
+    font-size: 12px; /* Smaller */
+}
+
+/* Login Footer */
+.login-footer {
+    text-align: center;
+    color: rgba(255, 255, 255, 0.3);
+    font-size: 11px; /* Smaller */
+    margin-top: 15px; /* Reduced */
+}
+
+/* Responsive */
+@media (max-width: 968px) {
+    .container {
+        flex-direction: column;
+        height: auto;
+        max-height: 90vh;
+        overflow-y: auto;
+        width: 95%;
+    }
+    
+    .left-panel, .right-panel {
+        width: 100%;
+    }
+    
+    .left-panel {
+        border-right: none;
+        border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+        padding: 30px 20px;
+    }
+    
+    .right-panel {
+        padding: 30px 20px;
+    }
+    
+    .welcome-title {
+        font-size: 28px;
+    }
+}
