@@ -1,0 +1,58 @@
+'app/globals.css'
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Custom CSS variables */
+:root {
+  --color-main: #ECF9FC;
+  --color-textPrimary: #2F6F7E;
+  --color-accent: #5FB3C8;
+  --color-neutral: #9CA3AF;
+  --color-white: #FFFFFF;
+}
+
+/* Custom font imports */
+@import url('https://fonts.googleapis.com/css2?family=Playfair+Display:wght@400;500;600;700;800&family=Poppins:wght@300;400;500;600;700&display=swap');
+
+/* Base styles */
+body {
+  font-family: 'Poppins', Arial, Helvetica, sans-serif;
+  margin: 0;
+  padding: 0;
+  background: var(--color-main);
+  color: var(--color-textPrimary);
+}
+
+/* Custom utility classes for spacing */
+.h-15 {
+  height: 60px;
+}
+
+.w-57\.5 {
+  width: 230px;
+}
+
+.w-18 {
+  width: 72px;
+}
+
+.top-15 {
+  top: 60px;
+}
+
+.mt-15 {
+  margin-top: 60px;
+}
+
+.min-w-6 {
+  min-width: 24px;
+}
+
+.max-w-100 {
+  max-width: 400px;
+}
+
+.z-100 {
+  z-index: 100;
+}

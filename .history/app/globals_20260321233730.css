@@ -1,0 +1,59 @@
+@import "tailwindcss";
+
+/* Custom theme configuration */
+@theme {
+  --color-main: #ECF9FC;
+  --color-textPrimary: #2F6F7E;
+  --color-accent: #5FB3C8;
+  --color-neutral: #9CA3AF;
+  --color-white: #FFFFFF;
+  
+  --spacing-57\.5: 230px;
+  --spacing-18: 72px;
+  --spacing-15: 60px;
+}
+
+/* Custom font imports */
+@import url('https://fonts.googleapis.com/css2?family=Playfair+Display:wght@400;500;600;700;800&family=Poppins:wght@300;400;500;600;700&display=swap');
+
+/* Base styles */
+body {
+  font-family: 'Poppins', Arial, Helvetica, sans-serif;
+  margin: 0;
+  padding: 0;
+  background: var(--color-main);
+  color: var(--color-textPrimary);
+}
+
+/* Custom utility classes for Tailwind v4 */
+@utility h-15 {
+  height: 60px;
+}
+
+@utility w-57\.5 {
+  width: 230px;
+}
+
+@utility w-18 {
+  width: 72px;
+}
+
+@utility top-15 {
+  top: 60px;
+}
+
+@utility mt-15 {
+  margin-top: 60px;
+}
+
+@utility min-w-6 {
+  min-width: 24px;
+}
+
+@utility max-w-100 {
+  max-width: 400px;
+}
+
+@utility z-100 {
+  z-index: 100;
+}

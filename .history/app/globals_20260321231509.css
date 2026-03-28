@@ -1,0 +1,72 @@
+@import "tailwindcss/preflight";
+@import "tailwindcss/utilities";
+
+/* Your custom CSS variables */
+:root {
+  --background: #ffffff;
+  --foreground: #171717;
+  --color-primary: #0F172B;
+  --color-secondary: #164A6E;
+  --color-tertiary: #2C5A6E;
+  --color-accent: #00B8DB;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --background: #0a0a0a;
+    --foreground: #ededed;
+  }
+}
+
+body {
+  background: var(--background);
+  color: var(--foreground);
+  font-family: 'Poppins', Arial, Helvetica, sans-serif;
+  margin: 0;
+  padding: 0;
+}
+
+/* Custom utility classes */
+.h-15 {
+  height: 3.75rem !important; /* 60px */
+}
+
+.w-13 {
+  width: 3.25rem !important; /* 52px */
+}
+
+.h-13 {
+  height: 3.25rem !important; /* 52px */
+}
+
+.mt-15 {
+  margin-top: 3.75rem !important; /* 60px */
+}
+
+/* Ensure fixed positioning works */
+.fixed {
+  position: fixed !important;
+}
+
+.z-50 {
+  z-index: 50 !important;
+}
+
+.z-40 {
+  z-index: 40 !important;
+}
+
+/* Sidebar transitions */
+.transition-all {
+  transition-property: all !important;
+  transition-timing-function: cubic-bezier(0.4, 0, 0.2, 1) !important;
+  transition-duration: 300ms !important;
+}
+
+.duration-300 {
+  transition-duration: 300ms !important;
+}
+
+.ease-in-out {
+  transition-timing-function: cubic-bezier(0.4, 0, 0.2, 1) !important;
+}

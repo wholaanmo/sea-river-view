@@ -1,0 +1,1 @@
+// components/guest/ActivityCard.js

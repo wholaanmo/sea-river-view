@@ -1,0 +1,13 @@
+// app/reservation-tracker/page.js
+export default function ReservationTrackerPage() {
+  return (
+    <div className="p-8">
+      <h1 className="text-4xl font-bold text-textPrimary font-playfair mb-4">
+        Reservation Tracker
+      </h1>
+      <p className="text-textSecondary">
+        Track your reservations here...
+      </p>
+    </div>
+  );
+}
