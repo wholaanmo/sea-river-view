@@ -21,7 +21,6 @@ export default function AdminRooms() {
   const [uploadingImage, setUploadingImage] = useState(false);
   const [confirmArchiveModal, setConfirmArchiveModal] = useState({ show: false, room: null });
   const [hasChanges, setHasChanges] = useState(false);
-  const [manualOverride, setManualOverride] = useState(false);
 
   const [formData, setFormData] = useState({
     type: '',
@@ -84,77 +83,17 @@ export default function AdminRooms() {
     setNotification({ show: true, message, type });
   };
   
-  // Update availability based on room counts
-  const updateAvailabilityBasedOnCounts = (totalRooms, maintenanceRooms, currentAvailability) => {
-    // If manually overridden, don't auto-update
-    if (manualOverride) {
-      return currentAvailability;
-    }
-    
-    const totalRoomsInt = parseInt(totalRooms) || 0;
-    const maintenanceRoomsInt = parseInt(maintenanceRooms) || 0;
-    
-    if (totalRoomsInt > maintenanceRoomsInt) {
-      return 'available';
-    } else if (totalRoomsInt === maintenanceRoomsInt) {
-      return 'maintenance';
-    }
-    return currentAvailability;
-  };
-  
   const handleInputChange = (e) => {
     const { name, value } = e.target;
-    
-    // Validate numeric fields to prevent negative numbers
-    if (name === 'totalRooms' || name === 'maintenanceRooms' || name === 'capacityMin' || name === 'capacityMax' || name === 'price') {
-      if (value === '') {
-        setFormData(prev => ({
-          ...prev,
-          [name]: value
-        }));
-      } else {
-        const numValue = parseInt(value);
-        if (numValue >= 0 || (name === 'price' && parseFloat(value) >= 0)) {
-          setFormData(prev => ({
-            ...prev,
-            [name]: value
-          }));
-        }
-      }
-    } else {
-      setFormData(prev => ({
-        ...prev,
-        [name]: value
-      }));
-    }
-    
+    setFormData(prev => ({
+      ...prev,
+      [name]: value
+    }));
     if (formErrors[name]) {
       setFormErrors(prev => ({
         ...prev,
         [name]: ''
       }));
-    }
-    
-    // Update availability when totalRooms or maintenanceRooms change
-    if (name === 'totalRooms' || name === 'maintenanceRooms') {
-      const newAvailability = updateAvailabilityBasedOnCounts(
-        name === 'totalRooms' ? value : formData.totalRooms,
-        name === 'maintenanceRooms' ? value : formData.maintenanceRooms,
-        formData.availability
-      );
-      
-      setFormData(prev => ({
-        ...prev,
-        availability: newAvailability
-      }));
-      
-      // Reset manual override when counts change
-      setManualOverride(false);
-    }
-    
-    // Handle manual availability override
-    if (name === 'availability') {
-      setManualOverride(true);
     }
     
     // Update hasChanges state in edit mode
@@ -235,10 +174,10 @@ export default function AdminRooms() {
       errors.type = 'Room type is required';
     }
     
-    if (!formData.totalRooms && formData.totalRooms !== 0) {
+    if (!formData.totalRooms) {
       errors.totalRooms = 'Total number of rooms is required';
-    } else if (parseInt(formData.totalRooms) < 0) {
-      errors.totalRooms = 'Total rooms cannot be negative';
+    } else if (parseInt(formData.totalRooms) <= 0) {
+      errors.totalRooms = 'Total rooms must be greater than 0';
     }
     
     // Validate maintenanceRooms
@@ -253,24 +192,24 @@ export default function AdminRooms() {
       }
     }
     
-    if (!formData.capacityMin && formData.capacityMin !== 0) {
+    if (!formData.capacityMin) {
       errors.capacityMin = 'Minimum capacity is required';
-    } else if (parseInt(formData.capacityMin) < 0) {
-      errors.capacityMin = 'Minimum capacity cannot be negative';
+    } else if (parseInt(formData.capacityMin) <= 0) {
+      errors.capacityMin = 'Minimum capacity must be greater than 0';
     }
     
-    if (!formData.capacityMax && formData.capacityMax !== 0) {
+    if (!formData.capacityMax) {
       errors.capacityMax = 'Maximum capacity is required';
-    } else if (parseInt(formData.capacityMax) < 0) {
-      errors.capacityMax = 'Maximum capacity cannot be negative';
+    } else if (parseInt(formData.capacityMax) <= 0) {
+      errors.capacityMax = 'Maximum capacity must be greater than 0';
     } else if (parseInt(formData.capacityMin) > parseInt(formData.capacityMax)) {
       errors.capacityMax = 'Maximum capacity must be greater than minimum capacity';
     }
     
-    if (!formData.price && formData.price !== 0) {
+    if (!formData.price) {
       errors.price = 'Price is required';
-    } else if (parseFloat(formData.price) < 0) {
-      errors.price = 'Price cannot be negative';
+    } else if (parseFloat(formData.price) <= 0) {
+      errors.price = 'Price must be greater than 0';
     }
     
     if (!formData.description.trim()) {
@@ -283,10 +222,10 @@ export default function AdminRooms() {
   const isFormIncomplete = () => {
     // Only check required fields (image is optional)
     return !formData.type.trim() || 
-           formData.totalRooms === '' || 
-           formData.capacityMin === '' || 
-           formData.capacityMax === '' || 
-           formData.price === '' || 
+           !formData.totalRooms || 
+           !formData.capacityMin || 
+           !formData.capacityMax || 
+           !formData.price || 
            !formData.description.trim();
   };
   
@@ -302,26 +241,19 @@ export default function AdminRooms() {
     setActionLoading(true);
     
     try {
-      const totalRoomsInt = parseInt(formData.totalRooms) || 0;
+      const totalRoomsInt = parseInt(formData.totalRooms);
       const maintenanceRoomsInt = formData.maintenanceRooms ? parseInt(formData.maintenanceRooms) : 0;
       const availableRoomsInt = totalRoomsInt - maintenanceRoomsInt;
-      
-      // Final availability check with manual override consideration
-      let finalAvailability = formData.availability;
-      if (!manualOverride) {
-        finalAvailability = updateAvailabilityBasedOnCounts(totalRoomsInt, maintenanceRoomsInt, formData.availability);
-      }
       
       const roomData = {
         ...formData,
         totalRooms: totalRoomsInt,
         maintenanceRooms: maintenanceRoomsInt,
         availableRooms: availableRoomsInt,
-        capacityMin: parseInt(formData.capacityMin) || 0,
-        capacityMax: parseInt(formData.capacityMax) || 0,
-        capacity: `${formData.capacityMin || 0}–${formData.capacityMax || 0}`,
-        price: parseFloat(formData.price) || 0,
-        availability: finalAvailability,
+        capacityMin: parseInt(formData.capacityMin),
+        capacityMax: parseInt(formData.capacityMax),
+        capacity: `${formData.capacityMin}–${formData.capacityMax}`,
+        price: parseFloat(formData.price),
         archived: false,
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString()
@@ -364,15 +296,9 @@ export default function AdminRooms() {
     try {
       const roomRef = doc(db, 'rooms', selectedRoom.id);
       
-      const totalRoomsInt = parseInt(formData.totalRooms) || 0;
+      const totalRoomsInt = parseInt(formData.totalRooms);
       const maintenanceRoomsInt = formData.maintenanceRooms ? parseInt(formData.maintenanceRooms) : 0;
       const availableRoomsInt = totalRoomsInt - maintenanceRoomsInt;
-      
-      // Final availability check with manual override consideration
-      let finalAvailability = formData.availability;
-      if (!manualOverride) {
-        finalAvailability = updateAvailabilityBasedOnCounts(totalRoomsInt, maintenanceRoomsInt, formData.availability);
-      }
       
       const previousData = {
         type: selectedRoom.type,
@@ -391,10 +317,10 @@ export default function AdminRooms() {
         type: formData.type,
         totalRooms: totalRoomsInt,
         maintenanceRooms: maintenanceRoomsInt,
-        capacityMin: parseInt(formData.capacityMin) || 0,
-        capacityMax: parseInt(formData.capacityMax) || 0,
-        price: parseFloat(formData.price) || 0,
-        availability: finalAvailability,
+        capacityMin: parseInt(formData.capacityMin),
+        capacityMax: parseInt(formData.capacityMax),
+        price: parseFloat(formData.price),
+        availability: formData.availability,
         description: formData.description,
         inclusions: formData.inclusions,
         imagesCount: formData.images.length
@@ -405,11 +331,10 @@ export default function AdminRooms() {
         totalRooms: totalRoomsInt,
         maintenanceRooms: maintenanceRoomsInt,
         availableRooms: availableRoomsInt,
-        capacityMin: parseInt(formData.capacityMin) || 0,
-        capacityMax: parseInt(formData.capacityMax) || 0,
-        capacity: `${formData.capacityMin || 0}–${formData.capacityMax || 0}`,
-        price: parseFloat(formData.price) || 0,
-        availability: finalAvailability,
+        capacityMin: parseInt(formData.capacityMin),
+        capacityMax: parseInt(formData.capacityMax),
+        capacity: `${formData.capacityMin}–${formData.capacityMax}`,
+        price: parseFloat(formData.price),
         updatedAt: new Date().toISOString()
       });
       
@@ -507,7 +432,6 @@ export default function AdminRooms() {
       description: room.description || '',
       images: room.images || []
     });
-    setManualOverride(false);
     setHasChanges(false);
     setModalType('edit');
     setShowModal(true);
@@ -534,7 +458,6 @@ export default function AdminRooms() {
     });
     setInclusionInput('');
     setFormErrors({});
-    setManualOverride(false);
     setHasChanges(false);
   };
 
@@ -566,7 +489,6 @@ export default function AdminRooms() {
     setModalType('add');
     resetForm();
     setSelectedRoom(null);
-    setManualOverride(false);
     setShowModal(true);
   };
   
@@ -969,7 +891,6 @@ export default function AdminRooms() {
                   value={formData.totalRooms}
                   onChange={handleInputChange}
                   placeholder="Number of rooms available"
-                  min="0"
                   className={`w-full px-3 py-2.5 border ${formErrors.totalRooms ? 'border-red-500' : 'border-ocean-light/20'} rounded-xl text-sm focus:outline-none focus:border-ocean-light focus:ring-2 focus:ring-ocean-light/20`}
                 />
                 {formErrors.totalRooms && <p className="text-red-500 text-xs mt-1">{formErrors.totalRooms}</p>}
@@ -1003,7 +924,6 @@ export default function AdminRooms() {
                     value={formData.capacityMin}
                     onChange={handleInputChange}
                     placeholder="Minimum guests"
-                    min="0"
                     className={`w-full px-3 py-2.5 border ${formErrors.capacityMin ? 'border-red-500' : 'border-ocean-light/20'} rounded-xl text-sm focus:outline-none focus:border-ocean-light`}
                   />
                   {formErrors.capacityMin && <p className="text-red-500 text-xs mt-1">{formErrors.capacityMin}</p>}
@@ -1017,7 +937,6 @@ export default function AdminRooms() {
                     value={formData.capacityMax}
                     onChange={handleInputChange}
                     placeholder="Maximum guests"
-                    min="0"
                     className={`w-full px-3 py-2.5 border ${formErrors.capacityMax ? 'border-red-500' : 'border-ocean-light/20'} rounded-xl text-sm focus:outline-none focus:border-ocean-light`}
                   />
                   {formErrors.capacityMax && <p className="text-red-500 text-xs mt-1">{formErrors.capacityMax}</p>}
@@ -1034,8 +953,6 @@ export default function AdminRooms() {
                     value={formData.price}
                     onChange={handleInputChange}
                     placeholder="Price per night"
-                    min="0"
-                    step="0.01"
                     className={`w-full px-3 py-2.5 border ${formErrors.price ? 'border-red-500' : 'border-ocean-light/20'} rounded-xl text-sm focus:outline-none focus:border-ocean-light`}
                   />
                   {formErrors.price && <p className="text-red-500 text-xs mt-1">{formErrors.price}</p>}
@@ -1053,11 +970,6 @@ export default function AdminRooms() {
                       <option key={status.value} value={status.value}>{status.label}</option>
                     ))}
                   </select>
-                  {manualOverride && (
-                    <p className="text-xs text-amber-600 mt-1">
-                      Manual override active. Status won't auto-update based on room counts.
-                    </p>
-                  )}
                 </div>
               </div>
               

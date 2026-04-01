@@ -83,6 +83,11 @@ export default function AdminRooms() {
   const showNotification = (message, type = 'success') => {
     setNotification({ show: true, message, type });
   };
+
+  const isDisabled =
+  actionLoading ||
+  (modalType === 'add' && isFormIncomplete()) ||
+  (modalType === 'edit' && !hasChanges);
   
   // Update availability based on room counts
   const updateAvailabilityBasedOnCounts = (totalRooms, maintenanceRooms, currentAvailability) => {
@@ -1171,27 +1176,24 @@ export default function AdminRooms() {
                 >
                   Cancel
                 </button>
-                <button
-                  type="submit"
-                  disabled={
-                    actionLoading || 
-                    (modalType === 'add' && isFormIncomplete()) ||
-                    (modalType === 'edit' && (!hasChanges))
-                  }
-                  className={`px-5 py-2.5 rounded-xl text-white text-sm font-medium transition-all duration-300 ${
-                    actionLoading || 
-                    (modalType === 'add' && isFormIncomplete()) ||
-                    (modalType === 'edit' && (!hasChanges))
-                      ? 'bg-neutral cursor-not-allowed'
-                      : 'bg-gradient-to-r from-ocean-mid to-ocean-light hover:shadow-lg hover:-translate-y-0.5'
-                  }`}
-                >
-                  {actionLoading ? (
-                    <span><i className="fas fa-spinner fa-spin mr-2"></i> {modalType === 'add' ? 'Adding...' : 'Updating...'}</span>
-                  ) : (
-                    modalType === 'add' ? 'Add Room' : 'Save Changes'
-                  )}
-                </button>
+               <button
+  type="submit"
+  disabled={isDisabled}
+  className={`px-5 py-2.5 rounded-xl text-white text-sm font-medium transition-all duration-300 ${
+    isDisabled
+      ? 'bg-neutral opacity-70 cursor-not-allowed'
+      : 'bg-gradient-to-r from-ocean-mid to-ocean-light hover:shadow-lg hover:-translate-y-0.5'
+  }`}
+>
+  {actionLoading ? (
+    <span>
+      <i className="fas fa-spinner fa-spin mr-2"></i>
+      {modalType === 'add' ? 'Adding...' : 'Updating...'}
+    </span>
+  ) : (
+    modalType === 'add' ? 'Add Room' : 'Save Changes'
+  )}
+</button>
               </div>
             </form>
           </div>

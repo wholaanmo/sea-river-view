@@ -508,6 +508,7 @@ export default function AdminRooms() {
       images: room.images || []
     });
     setManualOverride(false);
+    // Reset hasChanges to false when opening edit modal
     setHasChanges(false);
     setModalType('edit');
     setShowModal(true);
@@ -541,25 +542,30 @@ export default function AdminRooms() {
   const detectChanges = () => {
     if (!selectedRoom) return false;
     
+    // Compare strings with proper handling of empty/undefined values
     const hasTypeChanged = formData.type !== (selectedRoom.type || '');
-    const hasTotalRoomsChanged = parseInt(formData.totalRooms) !== (selectedRoom.totalRooms || '');
+    const hasTotalRoomsChanged = parseInt(formData.totalRooms || 0) !== (selectedRoom.totalRooms || 0);
     const hasMaintenanceRoomsChanged = parseInt(formData.maintenanceRooms || 0) !== (selectedRoom.maintenanceRooms || 0);
-    const hasCapacityMinChanged = parseInt(formData.capacityMin) !== (selectedRoom.capacityMin || '');
-    const hasCapacityMaxChanged = parseInt(formData.capacityMax) !== (selectedRoom.capacityMax || '');
-    const hasPriceChanged = parseFloat(formData.price) !== (selectedRoom.price || '');
+    const hasCapacityMinChanged = parseInt(formData.capacityMin || 0) !== (selectedRoom.capacityMin || 0);
+    const hasCapacityMaxChanged = parseInt(formData.capacityMax || 0) !== (selectedRoom.capacityMax || 0);
+    const hasPriceChanged = parseFloat(formData.price || 0) !== (selectedRoom.price || 0);
     const hasAvailabilityChanged = formData.availability !== (selectedRoom.availability || 'available');
     const hasDescriptionChanged = formData.description !== (selectedRoom.description || '');
     
-    const hasInclusionsChanged = JSON.stringify(formData.inclusions.sort()) !== 
-                                JSON.stringify((selectedRoom.inclusions || []).sort());
+    // Compare inclusions (sort to handle order differences)
+    const hasInclusionsChanged = JSON.stringify([...formData.inclusions].sort()) !== 
+                                JSON.stringify([...(selectedRoom.inclusions || [])].sort());
     
+    // Compare images
     const hasImagesChanged = JSON.stringify(formData.images) !== 
                             JSON.stringify(selectedRoom.images || []);
     
-    return hasTypeChanged || hasTotalRoomsChanged || hasMaintenanceRoomsChanged ||
-           hasCapacityMinChanged || hasCapacityMaxChanged || hasPriceChanged || 
-           hasAvailabilityChanged || hasDescriptionChanged || hasInclusionsChanged || 
-           hasImagesChanged;
+    const hasChanges = hasTypeChanged || hasTotalRoomsChanged || hasMaintenanceRoomsChanged ||
+                       hasCapacityMinChanged || hasCapacityMaxChanged || hasPriceChanged || 
+                       hasAvailabilityChanged || hasDescriptionChanged || hasInclusionsChanged || 
+                       hasImagesChanged;
+    
+    return hasChanges;
   };
   
   const openAddModal = () => {
