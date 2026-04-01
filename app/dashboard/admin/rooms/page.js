@@ -220,6 +220,7 @@ export default function AdminRooms() {
   };
   
   const isFormIncomplete = () => {
+    // Only check required fields (image is optional)
     return !formData.type.trim() || 
            !formData.totalRooms || 
            !formData.capacityMin || 
@@ -507,21 +508,16 @@ export default function AdminRooms() {
     return status ? status.label : availability;
   };
   
+  // FIXED: Calculate total units, available rooms, and maintenance rooms correctly
+  // Total units: sum of all totalRooms across all room types
   const totalUnits = rooms.reduce((sum, room) => sum + (room.totalRooms || 0), 0);
   
-  const availableRooms = rooms.reduce((sum, room) => {
-    if (room.availability === 'available') {
-      return sum + (room.totalRooms || 0);
-    }
-    return sum;
-  }, 0);
+  // Available rooms: sum of availableRooms for each room type
+  // availableRooms is already calculated as totalRooms - maintenanceRooms
+  const availableRooms = rooms.reduce((sum, room) => sum + (room.availableRooms || (room.totalRooms - (room.maintenanceRooms || 0))), 0);
   
-  const totalMaintenanceRooms = rooms.reduce((sum, room) => {
-    if (room.availability === 'maintenance') {
-      return sum + (room.totalRooms || 0);
-    }
-    return sum;
-  }, 0);
+  // Maintenance rooms: sum of maintenanceRooms across all room types
+  const totalMaintenanceRooms = rooms.reduce((sum, room) => sum + (room.maintenanceRooms || 0), 0);
   
   return (
     <div className="p-8 min-h-screen" style={{ backgroundColor: 'var(--color-blue-white)' }}>
@@ -1048,7 +1044,7 @@ export default function AdminRooms() {
                     <span className="text-sm text-textSecondary">
                       {uploadingImage ? 'Uploading...' : 'Click to upload images'}
                     </span>
-                    <span className="text-xs text-neutral">PNG, JPG up to 5MB</span>
+                    <span className="text-xs text-neutral">PNG, JPG up to 5MB (Optional)</span>
                   </label>
                 </div>
                 
@@ -1092,12 +1088,12 @@ export default function AdminRooms() {
                   disabled={
                     actionLoading || 
                     (modalType === 'add' && isFormIncomplete()) ||
-                    (modalType === 'edit' && (!hasChanges || isFormIncomplete()))
+                    (modalType === 'edit' && (!hasChanges))
                   }
                   className={`px-5 py-2.5 rounded-xl text-white text-sm font-medium transition-all duration-300 ${
                     actionLoading || 
                     (modalType === 'add' && isFormIncomplete()) ||
-                    (modalType === 'edit' && (!hasChanges || isFormIncomplete()))
+                    (modalType === 'edit' && (!hasChanges))
                       ? 'bg-neutral cursor-not-allowed'
                       : 'bg-gradient-to-r from-ocean-mid to-ocean-light hover:shadow-lg hover:-translate-y-0.5'
                   }`}
