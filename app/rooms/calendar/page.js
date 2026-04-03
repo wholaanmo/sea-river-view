@@ -5,7 +5,7 @@ import { useState, useEffect } from 'react';
 import { useSearchParams, useRouter } from 'next/navigation';
 import GuestLayout from '@/app/guest/layout';
 import { db } from '@/lib/firebase';
-import { collection, query, where, getDocs } from 'firebase/firestore';
+import { collection, query, where, getDocs, onSnapshot } from 'firebase/firestore';
 import Image from 'next/image';
 
 export default function RoomCalendar() {
@@ -15,7 +15,7 @@ export default function RoomCalendar() {
   const roomType = searchParams.get('roomType');
   const price = searchParams.get('price');
   const maxCapacity = parseInt(searchParams.get('capacity'));
-  const totalRooms = parseInt(searchParams.get('totalRooms'));
+  const totalRoomsParam = parseInt(searchParams.get('totalRooms'), 10);
 
   const [currentDate, setCurrentDate] = useState(new Date());
   const [selectedDate, setSelectedDate] = useState(null);
@@ -41,12 +41,20 @@ export default function RoomCalendar() {
 
   const timeSlots = generateTimeSlots();
 
-  useEffect(() => {
-    if (roomId) {
-      fetchRoomDetails();
-      fetchBookings();
-    }
-  }, [roomId]);
+  const totalRoomUnits =
+    Number.isFinite(totalRoomsParam) && totalRoomsParam > 0
+      ? totalRoomsParam
+      : Number.isFinite(roomDetails?.totalRooms) && roomDetails.totalRooms > 0
+        ? roomDetails.totalRooms
+        : 1;
+
+  const toJsDate = (value) => {
+    if (value == null) return null;
+    if (value instanceof Date) return Number.isNaN(value.getTime()) ? null : value;
+    if (typeof value.toDate === 'function') return value.toDate();
+    const d = new Date(value);
+    return Number.isNaN(d.getTime()) ? null : d;
+  };
 
   const fetchRoomDetails = async () => {
     try {
@@ -62,61 +70,93 @@ export default function RoomCalendar() {
     }
   };
 
-  // Fetch bookings and store per‑hour room counts for the check-in hour only
- const fetchBookings = async () => {
-  try {
+  useEffect(() => {
+    if (roomId) {
+      fetchRoomDetails();
+    }
+  }, [roomId]);
+
+  useEffect(() => {
+    if (!roomId) {
+      setLoading(false);
+      return;
+    }
+
     const bookingsRef = collection(db, 'bookings');
     const q = query(
       bookingsRef,
       where('roomId', '==', roomId),
       where('status', 'in', ['pending', 'confirmed', 'check-in'])
     );
-    const querySnapshot = await getDocs(q);
 
-    const booked = {};
+    const unsubscribe = onSnapshot(
+      q,
+      (querySnapshot) => {
+        const booked = {};
 
-    querySnapshot.forEach((doc) => {
-      const booking = doc.data();
-      const checkIn = new Date(booking.checkIn);
-      const checkOut = new Date(booking.checkOut);
-      const numberOfRooms = booking.numberOfRooms || 1;
+        querySnapshot.forEach((docSnap) => {
+          const booking = docSnap.data();
+          const checkIn = toJsDate(booking.checkIn);
+          const checkOut = toJsDate(booking.checkOut);
+          const numberOfRooms = booking.numberOfRooms || 1;
 
-      let current = new Date(checkIn);
+          if (!checkIn || !checkOut || checkOut <= checkIn) return;
 
-      while (current < checkOut) {
-        const dateKey = current.toDateString();
+          let current = new Date(checkIn);
 
-        if (!booked[dateKey]) {
-          booked[dateKey] = { times: {} };
-          for (let h = 0; h < 24; h++) {
-            booked[dateKey].times[`${h}:00`] = 0;
+          while (current < checkOut) {
+            const dateKey = current.toDateString();
+
+            if (!booked[dateKey]) {
+              booked[dateKey] = { times: {} };
+              for (let h = 0; h < 24; h++) {
+                booked[dateKey].times[`${h}:00`] = 0;
+              }
+            }
+
+            const startHour = current.getHours();
+            const endHour =
+              current.toDateString() === checkOut.toDateString()
+                ? checkOut.getHours()
+                : 24;
+
+            for (let h = startHour; h < endHour; h++) {
+              booked[dateKey].times[`${h}:00`] += numberOfRooms;
+            }
+
+            current.setDate(current.getDate() + 1);
+            current.setHours(0, 0, 0, 0);
           }
-        }
+        });
 
-        // ✅ LOOP THROUGH HOURS OF THE DAY
-        const startHour = current.getHours();
-        const endHour =
-          current.toDateString() === checkOut.toDateString()
-            ? checkOut.getHours()
-            : 24;
-
-        for (let h = startHour; h < endHour; h++) {
-          booked[dateKey].times[`${h}:00`] += numberOfRooms;
-        }
-
-        // move to next day at 00:00
-        current.setDate(current.getDate() + 1);
-        current.setHours(0, 0, 0, 0);
+        setBookedDates(booked);
+        setLoading(false);
+      },
+      (error) => {
+        console.error('Error listening to bookings:', error);
+        setLoading(false);
       }
-    });
+    );
 
-    setBookedDates(booked);
-    setLoading(false);
-  } catch (error) {
-    console.error('Error fetching bookings:', error);
-    setLoading(false);
-  }
-};
+    return () => unsubscribe();
+  }, [roomId]);
+
+  useEffect(() => {
+    if (!selectedDate || !selectedTime) return;
+    const timeMatch = selectedTime.match(/(\d+):(\d+)\s*(AM|PM)/i);
+    if (!timeMatch) return;
+    let hours = parseInt(timeMatch[1], 10);
+    const period = timeMatch[3].toUpperCase();
+    if (period === 'PM' && hours !== 12) hours += 12;
+    else if (period === 'AM' && hours === 12) hours = 0;
+    const dateKey = selectedDate.toDateString();
+    const timesObj = bookedDates[dateKey]?.times || {};
+    const bookedCount = timesObj[`${hours}:00`] || 0;
+    if (bookedCount >= totalRoomUnits) {
+      setSelectedTime('');
+    }
+  }, [bookedDates, selectedDate, selectedTime, totalRoomUnits]);
+
   const getDaysInMonth = (date) => {
     const year = date.getFullYear();
     const month = date.getMonth();
@@ -135,23 +175,20 @@ export default function RoomCalendar() {
     return days;
   };
 
-  // Check if there's at least one practical bookable time slot
-  // A practical bookable slot is one that allows a reasonable check-in (not too late)
-  // For this implementation, we consider all hours as potential check-in times
-const hasPracticalBookableSlot = (date) => {
-  const dateKey = date.toDateString();
-  const timesObj = bookedDates[dateKey]?.times || {};
+  // At least one of the 24 hourly slots still has inventory
+  const hasAnyAvailableSlot = (date) => {
+    const dateKey = date.toDateString();
+    const timesObj = bookedDates[dateKey]?.times || {};
 
-  // ✅ Only allow reasonable hours (example: 6AM–10PM)
-  for (let hour = 6; hour <= 22; hour++) {
-    const bookedCount = timesObj[`${hour}:00`] || 0;
-    if (bookedCount < totalRooms) {
-      return true;
+    for (let hour = 0; hour < 24; hour++) {
+      const bookedCount = timesObj[`${hour}:00`] || 0;
+      if (bookedCount < totalRoomUnits) {
+        return true;
+      }
     }
-  }
 
-  return false;
-};
+    return false;
+  };
 
   // A date is selectable if at least one hour has available rooms
   const isDateSelectable = (date) => {
@@ -166,17 +203,30 @@ const hasPracticalBookableSlot = (date) => {
     minBookableDate.setHours(0, 0, 0, 0);
     if (date < minBookableDate) return false;
 
-    return hasPracticalBookableSlot(date);
+    return hasAnyAvailableSlot(date);
   };
 
-  // A time slot is available if booked count < totalRooms
+  const isDateFullyBooked = (date) => {
+    if (!date) return false;
+    const dateKey = date.toDateString();
+    const timesObj = bookedDates[dateKey]?.times || {};
+    for (let hour = 0; hour < 24; hour++) {
+      const bookedCount = timesObj[`${hour}:00`] || 0;
+      if (bookedCount < totalRoomUnits) {
+        return false;
+      }
+    }
+    return true;
+  };
+
+  // A time slot is available if booked count < total room units for this type
   const isTimeSlotAvailable = (date, hour) => {
     if (!date) return false;
     const dateKey = date.toDateString();
     const timesObj = bookedDates[dateKey]?.times || {};
     const timeKey = `${hour}:00`;
     const bookedCount = timesObj[timeKey] || 0;
-    return bookedCount < totalRooms;
+    return bookedCount < totalRoomUnits;
   };
 
   const isDatePast = (date) => {
@@ -226,7 +276,7 @@ const hasPracticalBookableSlot = (date) => {
         checkInDateTime.setHours(hours, minutes, 0, 0);
       }
 
-      router.push(`/rooms/booking?roomId=${roomId}&roomType=${encodeURIComponent(roomType)}&price=${price}&maxCapacity=${maxCapacity}&totalRooms=${roomDetails?.totalRooms}&checkIn=${checkInDateTime.toISOString()}`);
+      router.push(`/rooms/booking?roomId=${roomId}&roomType=${encodeURIComponent(roomType)}&price=${price}&maxCapacity=${maxCapacity}&totalRooms=${roomDetails?.totalRooms ?? totalRoomUnits}&checkIn=${checkInDateTime.toISOString()}`);
     }
   };
 
@@ -330,19 +380,7 @@ const hasPracticalBookableSlot = (date) => {
                         const isPast = isDatePast(day);
                         const isTooSoon = isDateTooSoon(day);
                         const isSelected = selectedDate && selectedDate.toDateString() === day.toDateString();
-                        const dateKey = day.toDateString();
-                        const timesObj = bookedDates[dateKey]?.times || {};
-
-                        // Fully booked only if every hour has bookedCount >= totalRooms
-                        let isFullyBooked = true;
-                        for (let hour = 0; hour < 24; hour++) {
-                          const timeKey = `${hour}:00`;
-                          const bookedCount = timesObj[timeKey] || 0;
-                          if (bookedCount < totalRooms) {
-                            isFullyBooked = false;
-                            break;
-                          }
-                        }
+                        const isFullyBooked = isDateFullyBooked(day);
 
                         let bgColor = 'bg-white';
                         let textColor = 'text-textPrimary';
@@ -502,14 +540,16 @@ const hasPracticalBookableSlot = (date) => {
                         const isAvailable = isTimeSlotAvailable(selectedDate, slot.hour);
                         return (
                           <button
+                            type="button"
                             key={slot.value}
                             onClick={() => isAvailable && handleTimeSelect(slot)}
                             disabled={!isAvailable}
+                            aria-disabled={!isAvailable}
                             className={`py-2.5 px-3 rounded-lg text-sm font-medium transition-all duration-200 ${
                               selectedTime === slot.display
                                 ? 'bg-ocean-mid text-white shadow-md'
                                 : !isAvailable
-                                ? 'bg-gray-100 text-gray-400 cursor-not-allowed'
+                                ? 'bg-gray-100 text-gray-400 cursor-not-allowed pointer-events-none select-none'
                                 : 'bg-ocean-ice border border-ocean-light/20 text-textPrimary hover:bg-ocean-light/20 hover:shadow-sm'
                             }`}
                           >

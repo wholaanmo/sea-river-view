@@ -23,6 +23,8 @@ export default function BookingPage() {
   const [requestedBankInfo, setRequestedBankInfo] = useState(null);
   const [modalNotification, setModalNotification] = useState(null);
   const [bankRequestId, setBankRequestId] = useState(null);
+  const [copiedMessage, setCopiedMessage] = useState(false);
+  const [generatedBookingId, setGeneratedBookingId] = useState('');
 
   const [step, setStep] = useState(1);
   const [bookingData, setBookingData] = useState({
@@ -65,6 +67,31 @@ export default function BookingPage() {
   const [selectedBankAccount, setSelectedBankAccount] = useState(null);
   const [showBankSelection, setShowBankSelection] = useState(false);
   const [downPaymentAmount, setDownPaymentAmount] = useState(0);
+
+  // Generate unique booking reference number
+  const generateBookingReference = () => {
+    const timestamp = Date.now();
+    const randomNum = Math.floor(Math.random() * 900) + 100; // 3-digit random number (100-999)
+    return `BOOK-${timestamp}-${randomNum}`;
+  };
+
+  // Generate booking reference on component mount
+  useEffect(() => {
+    const newBookingId = generateBookingReference();
+    setGeneratedBookingId(newBookingId);
+    setBookingData(prev => ({ ...prev, bookingId: newBookingId }));
+  }, []);
+
+  // Copy to clipboard function
+  const copyToClipboard = async (text) => {
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopiedMessage(true);
+      setTimeout(() => setCopiedMessage(false), 2000);
+    } catch (err) {
+      console.error('Failed to copy text: ', err);
+    }
+  };
 
   // Calculate down payment (50% of total price)
   useEffect(() => {
@@ -110,48 +137,48 @@ export default function BookingPage() {
   }, [bookingData.bookingId]);
 
   // Real-time listener for bank request document to get provided bank details from admin
-useEffect(() => {
-  if (!bankRequestId) return;
-  
-  const bankRequestRef = doc(db, 'bank_requests', bankRequestId);
-  
-  const unsubscribe = onSnapshot(bankRequestRef, (docSnapshot) => {
-    if (docSnapshot.exists()) {
-      const data = docSnapshot.data();
-      // If admin has provided bank details, update the guest side
-      if (data.providedBankDetails && !bankDetailsProvided) {
-        setBankDetailsProvided(data.providedBankDetails);
-        setModalNotification({ message: 'Bank details have been provided by the resort! You can now proceed with payment.', type: 'success' });
+  useEffect(() => {
+    if (!bankRequestId) return;
+    
+    const bankRequestRef = doc(db, 'bank_requests', bankRequestId);
+    
+    const unsubscribe = onSnapshot(bankRequestRef, (docSnapshot) => {
+      if (docSnapshot.exists()) {
+        const data = docSnapshot.data();
+        // If admin has provided bank details, update the guest side
+        if (data.providedBankDetails && !bankDetailsProvided) {
+          setBankDetailsProvided(data.providedBankDetails);
+          setModalNotification({ message: 'Bank details have been provided by the resort! You can now proceed with payment.', type: 'success' });
+        }
       }
-    }
-  }, (error) => {
-    console.error('Error listening for bank request:', error);
-  });
-  
-  return () => unsubscribe();
-}, [bankRequestId, bankDetailsProvided]);
+    }, (error) => {
+      console.error('Error listening for bank request:', error);
+    });
+    
+    return () => unsubscribe();
+  }, [bankRequestId, bankDetailsProvided]);
 
   // Real-time listener for bank details provided by admin
-useEffect(() => {
-  if (!bookingData.bookingId) return;
-  
-  const bookingRef = doc(db, 'bookings', bookingData.bookingId);
-  
-  const unsubscribe = onSnapshot(bookingRef, (docSnapshot) => {
-    if (docSnapshot.exists()) {
-      const data = docSnapshot.data();
-      // If admin has provided bank details, update the guest side
-      if (data.bankDetailsProvided && !bankDetailsProvided) {
-        setBankDetailsProvided(data.bankDetailsProvided);
-        showNotification('Bank details have been provided by the resort! You can now proceed with payment.', 'success');
+  useEffect(() => {
+    if (!bookingData.bookingId) return;
+    
+    const bookingRef = doc(db, 'bookings', bookingData.bookingId);
+    
+    const unsubscribe = onSnapshot(bookingRef, (docSnapshot) => {
+      if (docSnapshot.exists()) {
+        const data = docSnapshot.data();
+        // If admin has provided bank details, update the guest side
+        if (data.bankDetailsProvided && !bankDetailsProvided) {
+          setBankDetailsProvided(data.bankDetailsProvided);
+          showNotification('Bank details have been provided by the resort! You can now proceed with payment.', 'success');
+        }
       }
-    }
-  }, (error) => {
-    console.error('Error listening for bank details:', error);
-  });
-  
-  return () => unsubscribe();
-}, [bookingData.bookingId]);
+    }, (error) => {
+      console.error('Error listening for bank details:', error);
+    });
+    
+    return () => unsubscribe();
+  }, [bookingData.bookingId]);
 
   // Fetch room details to get accurate max capacity from database
   useEffect(() => {
@@ -348,72 +375,72 @@ useEffect(() => {
     }
   };
 
-const handleNotifyResort = async () => {
-  if (!selectedBankAccount) {
-    setModalNotification({ message: 'Please select a bank account first', type: 'error' });
-    return;
-  }
-  
-  setNotifyingResort(true);
-  try {
-    // Store the request in state
-    setRequestedBankInfo({
-      bankName: selectedBankAccount.bankName,
-      accountName: selectedBankAccount.accountName,
-      accountNumber: selectedBankAccount.accountNumber,
-      requestedAt: new Date().toISOString()
-    });
+  const handleNotifyResort = async () => {
+    if (!selectedBankAccount) {
+      setModalNotification({ message: 'Please select a bank account first', type: 'error' });
+      return;
+    }
     
-    // Create a bank request document in a separate collection
-    const bankRequestsRef = collection(db, 'bank_requests');
-    const docRef = await addDoc(bankRequestsRef, {
-      guestName: `${bookingData.firstName} ${bookingData.lastName}`,
-      guestEmail: bookingData.email,
-      guestPhone: bookingData.phone,
-      roomType: bookingData.roomType,
-      roomId: bookingData.roomId,
-      checkIn: bookingData.checkIn,
-      checkOut: bookingData.checkOut,
-      nights: bookingData.nights,
-      totalPrice: totalPrice,
-      downPayment: downPaymentAmount,
-      requestedBank: {
+    setNotifyingResort(true);
+    try {
+      // Store the request in state
+      setRequestedBankInfo({
         bankName: selectedBankAccount.bankName,
         accountName: selectedBankAccount.accountName,
-        accountNumber: selectedBankAccount.accountNumber
-      },
-      status: 'pending',
-      createdAt: new Date().toISOString(),
-      read: false
-    });
-    
-    // Store the bank request ID for real-time listener
-    setBankRequestId(docRef.id);
-    
-    setBankRequestSent(true);
-    setModalNotification({ message: 'Request sent to resort! You will receive bank details shortly.', type: 'success' });
-    
-    // Clear the bank selection UI
-    setShowBankSelection(false);
-    setSelectedBankAccount(null);
-    
-  } catch (error) {
-    console.error('Error sending bank transfer request:', error);
-    setModalNotification({ message: 'Failed to send request. Please try again.', type: 'error' });
-  } finally {
-    setNotifyingResort(false);
-  }
-};
+        accountNumber: selectedBankAccount.accountNumber,
+        requestedAt: new Date().toISOString()
+      });
+      
+      // Create a bank request document in a separate collection
+      const bankRequestsRef = collection(db, 'bank_requests');
+      const docRef = await addDoc(bankRequestsRef, {
+        guestName: `${bookingData.firstName} ${bookingData.lastName}`,
+        guestEmail: bookingData.email,
+        guestPhone: bookingData.phone,
+        roomType: bookingData.roomType,
+        roomId: bookingData.roomId,
+        bookingId: generatedBookingId, // Store the formatted booking ID
+        checkIn: bookingData.checkIn,
+        checkOut: bookingData.checkOut,
+        nights: bookingData.nights,
+        totalPrice: totalPrice,
+        downPayment: downPaymentAmount,
+        requestedBank: {
+          bankName: selectedBankAccount.bankName,
+          accountName: selectedBankAccount.accountName,
+          accountNumber: selectedBankAccount.accountNumber
+        },
+        status: 'pending',
+        createdAt: new Date().toISOString(),
+        read: false
+      });
+      
+      // Store the bank request ID for real-time listener
+      setBankRequestId(docRef.id);
+      
+      setBankRequestSent(true);
+      setModalNotification({ message: 'Request sent to resort! You will receive bank details shortly.', type: 'success' });
+      
+      // Clear the bank selection UI
+      setShowBankSelection(false);
+      setSelectedBankAccount(null);
+      
+    } catch (error) {
+      console.error('Error sending bank transfer request:', error);
+      setModalNotification({ message: 'Failed to send request. Please try again.', type: 'error' });
+    } finally {
+      setNotifyingResort(false);
+    }
+  };
 
-const showNotification = (message, type = 'success') => {
-  // Store notification in state to show in modal
-  setModalNotification({ message, type });
-  // Auto-hide after 3 seconds
-  setTimeout(() => {
-    setModalNotification(null);
-  }, 3000);
-};
-
+  const showNotification = (message, type = 'success') => {
+    // Store notification in state to show in modal
+    setModalNotification({ message, type });
+    // Auto-hide after 3 seconds
+    setTimeout(() => {
+      setModalNotification(null);
+    }, 3000);
+  };
 
   const handleNextStep = () => {
     if (step === 1) {
@@ -499,10 +526,11 @@ const showNotification = (message, type = 'success') => {
         return;
       }
       
-      const bookingId = `BOOK-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
+      // Use the pre-generated booking ID
+      const bookingId = generatedBookingId;
       
       const booking = {
-        bookingId,
+        bookingId, // This is the formatted BOOK-xxx-xxx ID
         roomId: bookingData.roomId,
         roomType: bookingData.roomType,
         price: bookingData.price,
@@ -533,8 +561,10 @@ const showNotification = (message, type = 'success') => {
         booking.bankDetailsProvided = bankDetailsProvided;
       }
       
-      const docRef = await addDoc(collection(db, 'bookings'), booking);
-      setBookingData(prev => ({ ...prev, bookingId: docRef.id }));
+      // Add the booking to Firestore - Firestore will generate its own document ID
+      // but we're storing our formatted bookingId as a field in the document
+      await addDoc(collection(db, 'bookings'), booking);
+      
       setStep(4);
     } catch (error) {
       console.error('Error creating booking:', error);
@@ -869,173 +899,203 @@ const showNotification = (message, type = 'success') => {
                   
                   <div>
                     <label className="block text-sm font-semibold text-textPrimary mb-2">Upload Proof of Payment (Down Payment) *</label>
-                    <input
-                      type="file"
-                      accept="image/*"
-                      onChange={handlePaymentProofUpload}
-                      className="w-full"
-                      disabled={uploading}
-                    />
-                    {uploading && <p className="text-sm text-ocean-mid mt-1">Uploading...</p>}
-                    {bookingData.paymentProof && (
-                      <div className="mt-2">
-                        <p className="text-sm text-green-600">✓ Payment proof uploaded</p>
-                      </div>
-                    )}
+                    {/* Custom file input UI */}
+                    <div className="relative">
+                      <input
+                        type="file"
+                        accept="image/*"
+                        onChange={handlePaymentProofUpload}
+                        className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
+                        id="payment-proof-upload"
+                        disabled={uploading}
+                      />
+                      <label
+                        htmlFor="payment-proof-upload"
+                        className={`inline-flex items-center gap-2 px-6 py-2.5 rounded-lg font-medium transition-all duration-300 cursor-pointer ${
+                          uploading
+                            ? 'bg-gray-300 text-gray-500 cursor-not-allowed'
+                            : 'bg-gradient-to-r from-ocean-mid to-ocean-light text-white hover:shadow-lg'
+                        }`}
+                      >
+                        <i className="fas fa-upload"></i>
+                        {uploading ? 'Uploading...' : 'Choose File'}
+                      </label>
+                      {bookingData.paymentProof && (
+                        <span className="ml-3 text-sm text-green-600">
+                          <i className="fas fa-check-circle mr-1"></i>
+                          File uploaded
+                        </span>
+                      )}
+                    </div>
                   </div>
                 </div>
               )}
               
-{/* Bank Transfer Section */}
-{paymentMethod === 'bank_transfer' && (
-  <div className="space-y-6">
-    <div className="p-5 bg-ocean-ice rounded-xl">
-      <h3 className="text-lg font-semibold text-textPrimary mb-3 flex items-center gap-2">
-        <i className="fas fa-university text-ocean-mid"></i>
-        Bank Transfer
-      </h3>
+              {/* Bank Transfer Section */}
+              {paymentMethod === 'bank_transfer' && (
+                <div className="space-y-6">
+                  <div className="p-5 bg-ocean-ice rounded-xl">
+                    <h3 className="text-lg font-semibold text-textPrimary mb-3 flex items-center gap-2">
+                      <i className="fas fa-university text-ocean-mid"></i>
+                      Bank Transfer
+                    </h3>
 
-      {/* Modal Notification */}
-{modalNotification && (
-  <div className={`mb-4 p-3 rounded-lg text-sm ${
-    modalNotification.type === 'error' 
-      ? 'bg-red-50 text-red-700 border border-red-200' 
-      : 'bg-green-50 text-green-700 border border-green-200'
-  }`}>
-    <i className={`fas ${modalNotification.type === 'error' ? 'fa-exclamation-circle' : 'fa-check-circle'} mr-2`}></i>
-    {modalNotification.message}
-  </div>
-)}
-      
-      {bankDetailsProvided ? (
-        <div className="space-y-3">
-          <div className="bg-white rounded-lg p-4 space-y-2">
-            <p><strong>Bank:</strong> {bankDetailsProvided.bankName}</p>
-            <p><strong>Account Name:</strong> {bankDetailsProvided.accountName}</p>
-            <p><strong>Account Number:</strong> {bankDetailsProvided.accountNumber}</p>
-          </div>
-        </div>
-      ) : bankRequestSent ? (
-        <div className="text-center py-4">
-          <div className="w-16 h-16 bg-blue-100 rounded-full flex items-center justify-center mx-auto mb-3">
-            <i className="fas fa-clock text-blue-600 text-2xl"></i>
-          </div>
-          <p className="text-textSecondary font-medium mb-2">
-            Request Sent!
-          </p>
-          <p className="text-sm text-textSecondary">
-            Your bank transfer request has been sent to the resort.
-          </p>
-          <p className="text-xs text-textSecondary mt-2">
-            The resort will provide bank account details shortly. Please check back.
-          </p>
-          {requestedBankInfo && (
-            <div className="mt-3 p-3 bg-blue-50 rounded-lg">
-              <p className="text-xs text-blue-700">
-                <i className="fas fa-university mr-1"></i>
-                Requested Bank: <strong>{requestedBankInfo.bankName}</strong>
-              </p>
-            </div>
-          )}
-        </div>
-      ) : (
-        <div className="text-center py-4">
-          {!showBankSelection ? (
-            <>
-              <div className="w-16 h-16 bg-amber-100 rounded-full flex items-center justify-center mx-auto mb-3">
-                <i className="fas fa-university text-amber-600 text-2xl"></i>
-              </div>
-              <p className="text-textSecondary mb-3">
-                Select your preferred bank to receive account details:
-              </p>
-              {paymentSettings.bankAccounts.length > 0 ? (
-                <div className="space-y-2 mb-4">
-                  {paymentSettings.bankAccounts.map((bank) => (
-                    <button
-                      key={bank.id}
-                      onClick={() => {
-                        setSelectedBankAccount(bank);
-                        setShowBankSelection(true);
-                      }}
-                      className="w-full text-left p-3 border border-ocean-light/20 rounded-lg hover:bg-ocean-ice transition-all duration-200"
-                    >
-                      <p className="font-semibold text-textPrimary">{bank.bankName}</p>
-                      <p className="text-xs text-textSecondary">{bank.accountName}</p>
-                    </button>
-                  ))}
+                    {/* Modal Notification */}
+                    {modalNotification && (
+                      <div className={`mb-4 p-3 rounded-lg text-sm ${
+                        modalNotification.type === 'error' 
+                          ? 'bg-red-50 text-red-700 border border-red-200' 
+                          : 'bg-green-50 text-green-700 border border-green-200'
+                      }`}>
+                        <i className={`fas ${modalNotification.type === 'error' ? 'fa-exclamation-circle' : 'fa-check-circle'} mr-2`}></i>
+                        {modalNotification.message}
+                      </div>
+                    )}
+                    
+                    {bankDetailsProvided ? (
+                      <div className="space-y-3">
+                        <div className="bg-white rounded-lg p-4 space-y-2">
+                          <p><strong>Bank:</strong> {bankDetailsProvided.bankName}</p>
+                          <p><strong>Account Name:</strong> {bankDetailsProvided.accountName}</p>
+                          <p><strong>Account Number:</strong> {bankDetailsProvided.accountNumber}</p>
+                        </div>
+                      </div>
+                    ) : bankRequestSent ? (
+                      <div className="text-center py-4">
+                        <div className="w-16 h-16 bg-blue-100 rounded-full flex items-center justify-center mx-auto mb-3">
+                          <i className="fas fa-clock text-blue-600 text-2xl"></i>
+                        </div>
+                        <p className="text-textSecondary font-medium mb-2">
+                          Request Sent!
+                        </p>
+                        <p className="text-sm text-textSecondary">
+                          Your bank transfer request has been sent to the resort.
+                        </p>
+                        <p className="text-xs text-textSecondary mt-2">
+                          The resort will provide bank account details shortly. Please check back.
+                        </p>
+                        {requestedBankInfo && (
+                          <div className="mt-3 p-3 bg-blue-50 rounded-lg">
+                            <p className="text-xs text-blue-700">
+                              <i className="fas fa-university mr-1"></i>
+                              Requested Bank: <strong>{requestedBankInfo.bankName}</strong>
+                            </p>
+                          </div>
+                        )}
+                      </div>
+                    ) : (
+                      <div className="text-center py-4">
+                        {!showBankSelection ? (
+                          <>
+                            <div className="w-16 h-16 bg-amber-100 rounded-full flex items-center justify-center mx-auto mb-3">
+                              <i className="fas fa-university text-amber-600 text-2xl"></i>
+                            </div>
+                            <p className="text-textSecondary mb-3">
+                              Select your preferred bank to receive account details:
+                            </p>
+                            {paymentSettings.bankAccounts.length > 0 ? (
+                              <div className="space-y-2 mb-4">
+                                {paymentSettings.bankAccounts.map((bank) => (
+                                  <button
+                                    key={bank.id}
+                                    onClick={() => {
+                                      setSelectedBankAccount(bank);
+                                      setShowBankSelection(true);
+                                    }}
+                                    className="w-full text-left p-3 border border-ocean-light/20 rounded-lg hover:bg-ocean-ice transition-all duration-200"
+                                  >
+                                    <p className="font-semibold text-textPrimary">{bank.bankName}</p>
+                                    <p className="text-xs text-textSecondary">{bank.accountName}</p>
+                                  </button>
+                                ))}
+                              </div>
+                            ) : (
+                              <p className="text-sm text-amber-600">No bank accounts available. Please contact the resort.</p>
+                            )}
+                          </>
+                        ) : (
+                          <div className="space-y-4">
+                            <div className="bg-amber-50 rounded-lg p-4">
+                              <p className="font-semibold text-amber-800 mb-2">Selected Bank:</p>
+                              <p><strong>Bank:</strong> {selectedBankAccount?.bankName}</p>
+                              <p><strong>Account Name:</strong> {selectedBankAccount?.accountName}</p>
+                            </div>
+                            <button
+                              onClick={handleNotifyResort}
+                              disabled={notifyingResort}
+                              className="w-full px-6 py-2 bg-amber-500 text-white rounded-lg font-medium hover:bg-amber-600 transition-all duration-200"
+                            >
+                              {notifyingResort ? (
+                                <><i className="fas fa-spinner fa-spin mr-2"></i>Sending Request...</>
+                              ) : (
+                                <><i className="fas fa-paper-plane mr-2"></i>Confirm & Send Request</>
+                              )}
+                            </button>
+                            <button
+                              onClick={() => setShowBankSelection(false)}
+                              className="w-full px-6 py-2 border border-ocean-light/20 rounded-lg text-textSecondary hover:bg-ocean-ice transition-all duration-200"
+                            >
+                              Back to Bank Selection
+                            </button>
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                  
+                  <div className="p-5 bg-gradient-to-r from-ocean-ice to-blue-white rounded-xl">
+                    <p className="text-sm font-semibold text-textPrimary mb-1">Down Payment Required</p>
+                    <p className="text-2xl font-bold text-amber-600">₱{downPaymentAmount.toLocaleString()}</p>
+                    <p className="text-xs text-textSecondary mt-1">50% of total price</p>
+                  </div>
+
+                  <div className="p-4 bg-blue-50 rounded-xl border border-blue-200">
+                    <p className="text-sm text-blue-800 mb-2">
+                      <i className="fas fa-info-circle mr-2"></i>
+                      <strong>Payment Notes:</strong>
+                    </p>
+                    <ul className="text-xs text-blue-700 space-y-1 ml-4 list-disc">
+                      <li>You are only required to pay the <strong>down payment (50%)</strong> to confirm your reservation.</li>
+                      <li>The <strong>remaining balance</strong> (₱{(totalPrice - downPaymentAmount).toLocaleString()}) should be paid at the resort upon check-in.</li>
+                      <li>If you cancel your reservation, the resort will retain <strong>50% of the down payment</strong>.</li>
+                    </ul>
+                  </div>
+                  
+                  {bankDetailsProvided && (
+                    <div>
+                      <label className="block text-sm font-semibold text-textPrimary mb-2">Upload Proof of Payment (Down Payment) *</label>
+                      {/* Custom file input UI */}
+                      <div className="relative">
+                        <input
+                          type="file"
+                          accept="image/*"
+                          onChange={handlePaymentProofUpload}
+                          className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
+                          id="payment-proof-upload"
+                          disabled={uploading}
+                        />
+                        <label
+                          htmlFor="payment-proof-upload"
+                          className={`inline-flex items-center gap-2 px-6 py-2.5 rounded-lg font-medium transition-all duration-300 cursor-pointer ${
+                            uploading
+                              ? 'bg-gray-300 text-gray-500 cursor-not-allowed'
+                              : 'bg-gradient-to-r from-ocean-mid to-ocean-light text-white hover:shadow-lg'
+                          }`}
+                        >
+                          <i className="fas fa-upload"></i>
+                          {uploading ? 'Uploading...' : 'Choose File'}
+                        </label>
+                        {bookingData.paymentProof && (
+                          <span className="ml-3 text-sm text-green-600">
+                            <i className="fas fa-check-circle mr-1"></i>
+                            File uploaded
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                  )}
                 </div>
-              ) : (
-                <p className="text-sm text-amber-600">No bank accounts available. Please contact the resort.</p>
               )}
-            </>
-          ) : (
-            <div className="space-y-4">
-              <div className="bg-amber-50 rounded-lg p-4">
-                <p className="font-semibold text-amber-800 mb-2">Selected Bank:</p>
-                <p><strong>Bank:</strong> {selectedBankAccount?.bankName}</p>
-                <p><strong>Account Name:</strong> {selectedBankAccount?.accountName}</p>
-              </div>
-              <button
-                onClick={handleNotifyResort}
-                disabled={notifyingResort}
-                className="w-full px-6 py-2 bg-amber-500 text-white rounded-lg font-medium hover:bg-amber-600 transition-all duration-200"
-              >
-                {notifyingResort ? (
-                  <><i className="fas fa-spinner fa-spin mr-2"></i>Sending Request...</>
-                ) : (
-                  <><i className="fas fa-paper-plane mr-2"></i>Confirm & Send Request</>
-                )}
-              </button>
-              <button
-                onClick={() => setShowBankSelection(false)}
-                className="w-full px-6 py-2 border border-ocean-light/20 rounded-lg text-textSecondary hover:bg-ocean-ice transition-all duration-200"
-              >
-                Back to Bank Selection
-              </button>
-            </div>
-          )}
-        </div>
-      )}
-    </div>
-    
-    <div className="p-5 bg-gradient-to-r from-ocean-ice to-blue-white rounded-xl">
-      <p className="text-sm font-semibold text-textPrimary mb-1">Down Payment Required</p>
-      <p className="text-2xl font-bold text-amber-600">₱{downPaymentAmount.toLocaleString()}</p>
-      <p className="text-xs text-textSecondary mt-1">50% of total price</p>
-    </div>
-
-    <div className="p-4 bg-blue-50 rounded-xl border border-blue-200">
-      <p className="text-sm text-blue-800 mb-2">
-        <i className="fas fa-info-circle mr-2"></i>
-        <strong>Payment Notes:</strong>
-      </p>
-      <ul className="text-xs text-blue-700 space-y-1 ml-4 list-disc">
-        <li>You are only required to pay the <strong>down payment (50%)</strong> to confirm your reservation.</li>
-        <li>The <strong>remaining balance</strong> (₱{(totalPrice - downPaymentAmount).toLocaleString()}) should be paid at the resort upon check-in.</li>
-        <li>If you cancel your reservation, the resort will retain <strong>50% of the down payment</strong>.</li>
-      </ul>
-    </div>
-    
-    {bankDetailsProvided && (
-      <div>
-        <label className="block text-sm font-semibold text-textPrimary mb-2">Upload Proof of Payment (Down Payment) *</label>
-        <input
-          type="file"
-          accept="image/*"
-          onChange={handlePaymentProofUpload}
-          className="w-full"
-          disabled={uploading}
-        />
-        {uploading && <p className="text-sm text-ocean-mid mt-1">Uploading...</p>}
-        {bookingData.paymentProof && (
-          <div className="mt-2">
-            <p className="text-sm text-green-600">✓ Payment proof uploaded</p>
-          </div>
-        )}
-      </div>
-    )}
-  </div>
-)}
               
               <div className="flex gap-3 mt-6">
                 <button
@@ -1070,9 +1130,28 @@ const showNotification = (message, type = 'success') => {
               <p className="text-textSecondary mb-4">
                 Thank you for your booking. We'll send a confirmation email to {bookingData.email}
               </p>
+              
+              {/* Booking Reference with Copy Button */}
               <div className="p-4 bg-ocean-ice rounded-lg mb-4">
-                <p className="text-sm text-textPrimary">Booking Reference: <strong>{bookingData.bookingId}</strong></p>
+                <p className="text-sm text-textPrimary">Booking Reference:</p>
+                <div className="flex items-center justify-center gap-2 mt-1">
+                  <strong className="text-lg font-mono">{generatedBookingId}</strong>
+                  <button
+                    onClick={() => copyToClipboard(generatedBookingId)}
+                    className="p-1.5 rounded-lg bg-white hover:bg-ocean-light/10 text-ocean-mid transition-all duration-200"
+                    title="Copy to clipboard"
+                  >
+                    <i className="fas fa-copy"></i>
+                  </button>
+                </div>
+                {copiedMessage && (
+                  <p className="text-xs text-green-600 mt-1 animate-fadeIn">
+                    <i className="fas fa-check-circle mr-1"></i>
+                    Copied!
+                  </p>
+                )}
               </div>
+              
               <div className="p-4 bg-amber-50 rounded-lg mb-6">
                 <p className="text-sm text-amber-800">
                   <i className="fas fa-info-circle mr-2"></i>
@@ -1090,6 +1169,22 @@ const showNotification = (message, type = 'success') => {
           )}
         </div>
       </div>
+
+      <style jsx>{`
+        @keyframes fadeIn {
+          from {
+            opacity: 0;
+            transform: translateY(-5px);
+          }
+          to {
+            opacity: 1;
+            transform: translateY(0);
+          }
+        }
+        .animate-fadeIn {
+          animation: fadeIn 0.3s ease-out;
+        }
+      `}</style>
     </GuestLayout>
   );
 }

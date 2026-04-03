@@ -17,8 +17,12 @@ export default function AdminReservations() {
   const [actionLoading, setActionLoading] = useState({});
   const [showPaymentModal, setShowPaymentModal] = useState(false);
   const [selectedBooking, setSelectedBooking] = useState(null);
+  
+  // New state for confirmation modals
+  const [confirmModal, setConfirmModal] = useState({ show: false, booking: null, type: '' });
+  const [cancelModal, setCancelModal] = useState({ show: false, booking: null, reason: '' });
 
-  const statuses = ['all', 'pending', 'confirmed', 'check-in', 'check-out', 'cancelled'];
+  const statuses = ['all', 'pending', 'confirmed', 'check-in', 'check-out', 'cancelled', 'cancelled-by-guest'];
 
   // Real-time listener for room bookings
   useEffect(() => {
@@ -53,87 +57,106 @@ export default function AdminReservations() {
     setDayTours([]);
   }, []);
 
-  const getStatusColor = (status) => {
-    switch(status) {
-      case 'pending':
-        return 'bg-yellow-100 text-yellow-700';
-      case 'confirmed':
-        return 'bg-green-100 text-green-700';
-      case 'check-in':
-        return 'bg-blue-100 text-blue-700';
-      case 'check-out':
-        return 'bg-purple-100 text-purple-700';
-      case 'cancelled':
-        return 'bg-red-100 text-red-700';
-      default:
-        return 'bg-gray-100 text-gray-700';
+  // Auto-hide notification
+  useEffect(() => {
+    if (notification.show) {
+      const timer = setTimeout(() => {
+        setNotification({ show: false, message: '', type: '' });
+      }, 4000);
+      return () => clearTimeout(timer);
+    }
+  }, [notification]);
+
+const getStatusColor = (status) => {
+  switch(status) {
+    case 'pending':
+      return 'bg-yellow-100 text-yellow-700';
+    case 'confirmed':
+      return 'bg-green-100 text-green-700';
+    case 'check-in':
+      return 'bg-blue-100 text-blue-700';
+    case 'check-out':
+      return 'bg-purple-100 text-purple-700';
+    case 'cancelled':
+      return 'bg-red-100 text-red-700';
+    case 'cancelled-by-guest':
+      return 'bg-red-100 text-red-700';
+    default:
+      return 'bg-gray-100 text-gray-700';
+  }
+};
+
+  const formatDateTime = (timestamp) => {
+    if (!timestamp) return 'N/A';
+    try {
+      let dateObj;
+      if (timestamp && typeof timestamp.toDate === 'function') {
+        dateObj = timestamp.toDate();
+      } else if (timestamp && typeof timestamp === 'object' && timestamp.seconds) {
+        dateObj = new Date(timestamp.seconds * 1000);
+      } else {
+        dateObj = new Date(timestamp);
+      }
+      
+      if (isNaN(dateObj.getTime())) {
+        return 'Invalid Date';
+      }
+      
+      return dateObj.toLocaleString('en-US', {
+        year: 'numeric',
+        month: 'short',
+        day: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit',
+        hour12: true
+      });
+    } catch (error) {
+      console.error('Error formatting timestamp:', error);
+      return 'Invalid Date';
     }
   };
 
-const formatDateTime = (timestamp) => {
-  if (!timestamp) return 'N/A';
-  try {
-    let dateObj;
-    if (timestamp && typeof timestamp.toDate === 'function') {
-      dateObj = timestamp.toDate();
-    } else if (timestamp && typeof timestamp === 'object' && timestamp.seconds) {
-      dateObj = new Date(timestamp.seconds * 1000);
-    } else {
-      dateObj = new Date(timestamp);
-    }
-    
-    if (isNaN(dateObj.getTime())) {
+  const formatDateTimeFromDate = (date) => {
+    if (!date) return 'N/A';
+    try {
+      let dateObj;
+      if (date && typeof date.toDate === 'function') {
+        dateObj = date.toDate();
+      } else if (date && typeof date === 'object' && date.seconds) {
+        dateObj = new Date(date.seconds * 1000);
+      } else {
+        dateObj = new Date(date);
+      }
+      
+      if (isNaN(dateObj.getTime())) {
+        return 'Invalid Date';
+      }
+      
+      return dateObj.toLocaleString('en-US', {
+        year: 'numeric',
+        month: 'short',
+        day: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit',
+        hour12: true
+      });
+    } catch (error) {
+      console.error('Error formatting date:', error);
       return 'Invalid Date';
     }
-    
-    return dateObj.toLocaleString('en-US', {
-      year: 'numeric',
-      month: 'short',
-      day: 'numeric',
-      hour: '2-digit',
-      minute: '2-digit',
-      hour12: true
-    });
-  } catch (error) {
-    console.error('Error formatting timestamp:', error);
-    return 'Invalid Date';
-  }
-};
+  };
 
- const formatDateTimeFromDate = (date) => {
-  if (!date) return 'N/A';
-  try {
-    // Handle Firestore Timestamp
-    let dateObj;
-    if (date && typeof date.toDate === 'function') {
-      dateObj = date.toDate();
-    } else if (date && typeof date === 'object' && date.seconds) {
-      // Handle Firestore Timestamp with seconds property
-      dateObj = new Date(date.seconds * 1000);
-    } else {
-      dateObj = new Date(date);
+  // Updated confirm reservation function with confirmation modal
+  const handleConfirmReservation = async () => {
+    const booking = confirmModal.booking;
+    if (!booking) return;
+    
+    if (booking.status !== 'pending') {
+      showNotification('This reservation is no longer pending.', 'error');
+      setConfirmModal({ show: false, booking: null, type: '' });
+      return;
     }
     
-    // Check if date is valid
-    if (isNaN(dateObj.getTime())) {
-      return 'Invalid Date';
-    }
-    
-    return dateObj.toLocaleString('en-US', {
-      year: 'numeric',
-      month: 'short',
-      day: 'numeric',
-      hour: '2-digit',
-      minute: '2-digit',
-      hour12: true
-    });
-  } catch (error) {
-    console.error('Error formatting date:', error);
-    return 'Invalid Date';
-  }
-};
-
-  const handleConfirmReservation = async (booking) => {
     setActionLoading(prev => ({ ...prev, [booking.id]: true }));
     try {
       const bookingRef = doc(db, 'bookings', booking.id);
@@ -142,7 +165,6 @@ const formatDateTime = (timestamp) => {
         updatedAt: new Date().toISOString()
       });
 
-      // Log the action
       await logAdminAction({
         action: 'Confirmed Reservation',
         module: 'Reservations',
@@ -150,6 +172,8 @@ const formatDateTime = (timestamp) => {
       });
 
       showNotification(`Booking ${booking.bookingId} has been confirmed.`, 'success');
+      setShowPaymentModal(false); // Close modal on success
+      setConfirmModal({ show: false, booking: null, type: '' });
     } catch (error) {
       console.error('Error confirming reservation:', error);
       showNotification('Failed to confirm reservation.', 'error');
@@ -158,28 +182,44 @@ const formatDateTime = (timestamp) => {
     }
   };
 
-  const handleCancelReservation = async (booking) => {
-    if (!confirm(`Are you sure you want to cancel booking ${booking.bookingId}? This will make the dates and time slots available again.`)) {
+  // Updated cancel reservation function with reason
+  const handleCancelReservation = async () => {
+    const booking = cancelModal.booking;
+    const reason = cancelModal.reason;
+    
+    if (!booking) return;
+    
+    if (!reason.trim()) {
+      showNotification('Please provide a cancellation reason.', 'error');
       return;
     }
-
+    
+    if (booking.status !== 'pending') {
+      showNotification('This reservation is no longer pending.', 'error');
+      setCancelModal({ show: false, booking: null, reason: '' });
+      return;
+    }
+    
     setActionLoading(prev => ({ ...prev, [booking.id]: true }));
     try {
       const bookingRef = doc(db, 'bookings', booking.id);
       await updateDoc(bookingRef, {
         status: 'cancelled',
         cancelledAt: new Date().toISOString(),
+        cancellationReason: reason,
+        cancelledBy: 'admin',
         updatedAt: new Date().toISOString()
       });
 
-      // Log the action
       await logAdminAction({
         action: 'Cancelled Reservation',
         module: 'Reservations',
-        details: `Cancelled booking ${booking.bookingId} for ${booking.guestInfo?.firstName} ${booking.guestInfo?.lastName} - ${booking.roomType}. Dates and time slots are now available again.`
+        details: `Cancelled booking ${booking.bookingId} for ${booking.guestInfo?.firstName} ${booking.guestInfo?.lastName} - ${booking.roomType}. Reason: ${reason}`
       });
 
-      showNotification(`Booking ${booking.bookingId} has been cancelled. Dates and time slots are now available again.`, 'success');
+      showNotification(`Booking ${booking.bookingId} has been cancelled.`, 'success');
+      setShowPaymentModal(false); // Close modal on success
+      setCancelModal({ show: false, booking: null, reason: '' });
     } catch (error) {
       console.error('Error cancelling reservation:', error);
       showNotification('Failed to cancel reservation.', 'error');
@@ -190,9 +230,22 @@ const formatDateTime = (timestamp) => {
 
   const showNotification = (message, type = 'success') => {
     setNotification({ show: true, message, type });
-    setTimeout(() => {
-      setNotification({ show: false, message: '', type: '' });
-    }, 4000);
+  };
+
+  // Helper function to calculate 50% down payment
+  const calculateDownPayment = (totalPrice) => {
+    if (!totalPrice) return 0;
+    const total = typeof totalPrice === 'number' ? totalPrice : Number(totalPrice) || 0;
+    return total * 0.5;
+  };
+
+  // Helper function to calculate remaining balance
+  const calculateBalance = (booking) => {
+    if (booking.status !== 'confirmed') return 'Not confirmed';
+    const total = typeof booking.totalPrice === 'number' ? booking.totalPrice : Number(booking.totalPrice) || 0;
+    const downPayment = total * 0.5;
+    const balance = total - downPayment;
+    return `₱${balance.toLocaleString()}`;
   };
 
   const filteredBookings = bookings.filter(booking => {
@@ -315,6 +368,8 @@ const formatDateTime = (timestamp) => {
                       <th className="px-4 py-3 text-left text-sm font-semibold text-textPrimary">Check-out</th>
                       <th className="px-4 py-3 text-left text-sm font-semibold text-textPrimary">Guests</th>
                       <th className="px-4 py-3 text-left text-sm font-semibold text-textPrimary">Total</th>
+                      <th className="px-4 py-3 text-left text-sm font-semibold text-textPrimary">50% Down Payment</th>
+                      <th className="px-4 py-3 text-left text-sm font-semibold text-textPrimary">Balance</th>
                       <th className="px-4 py-3 text-left text-sm font-semibold text-textPrimary">Status</th>
                       <th className="px-4 py-3 text-left text-sm font-semibold text-textPrimary">Actions</th>
                       <th className="px-4 py-3 text-left text-sm font-semibold text-textPrimary">Booked On</th>
@@ -323,7 +378,7 @@ const formatDateTime = (timestamp) => {
                   <tbody>
                     {filteredBookings.length === 0 ? (
                       <tr>
-                        <td colSpan="10" className="px-4 py-12 text-center text-neutral">
+                        <td colSpan="12" className="px-4 py-12 text-center text-neutral">
                           <i className="fas fa-calendar-alt text-5xl mb-3 opacity-50 block"></i>
                           <p className="text-lg">No reservations found</p>
                           <p className="text-sm">Reservations will appear here once guests book</p>
@@ -334,94 +389,60 @@ const formatDateTime = (timestamp) => {
                         <tr key={booking.id} className="border-b border-ocean-light/10 hover:bg-ocean-ice/30 transition-colors">
                           <td className="px-4 py-3">
                             <span className="font-mono text-sm">{booking.bookingId}</span>
-                          </td>
+                           </td>
                           <td className="px-4 py-3">
                             <div className="font-medium text-textPrimary">
                               {booking.guestInfo?.firstName} {booking.guestInfo?.lastName}
                             </div>
                             <div className="text-xs text-neutral">{booking.guestInfo?.email}</div>
-                          </td>
+                           </td>
                           <td className="px-4 py-3">
                             <div className="text-sm text-textPrimary">{booking.roomType}</div>
-                          </td>
+                           </td>
                           <td className="px-4 py-3 text-sm text-textSecondary">
                             {formatDateTimeFromDate(booking.checkIn)}
-                          </td>
+                           </td>
                           <td className="px-4 py-3 text-sm text-textSecondary">
                             {formatDateTimeFromDate(booking.checkOut)}
-                          </td>
+                           </td>
                           <td className="px-4 py-3 text-sm text-textSecondary">
                             {booking.guests}
-                          </td>
+                           </td>
                           <td className="px-4 py-3">
-                            <span className="font-semibold text-ocean-mid">₱{booking.totalPrice?.toLocaleString()}</span>
-                          </td>
+                            <span className="font-semibold text-ocean-mid">₱{Number(booking.totalPrice).toLocaleString()}</span>
+                           </td>
+                          <td className="px-4 py-3">
+                            <span className="font-semibold text-ocean-mid">₱{calculateDownPayment(booking.totalPrice).toLocaleString()}</span>
+                           </td>
+                          <td className="px-4 py-3">
+                            <span className={`text-sm font-medium ${booking.status === 'confirmed' ? 'text-ocean-mid' : 'text-neutral'}`}>
+                              {calculateBalance(booking)}
+                            </span>
+                           </td>
                           <td className="px-4 py-3">
                             <span className={`px-2.5 py-1 rounded-full text-xs font-medium ${getStatusColor(booking.status)}`}>
                               {booking.status?.charAt(0).toUpperCase() + booking.status?.slice(1)}
                             </span>
-                          </td>
+                           </td>
                           <td className="px-4 py-3">
-                            {booking.status === 'pending' && (
-                              <div className="flex gap-2">
-<button
-        onClick={() => {
-          setSelectedBooking(booking);
-          setShowPaymentModal(true);
-        }}
-        className="px-3 py-1.5 bg-blue-600 text-white rounded-lg text-xs font-medium hover:bg-blue-700 transition-all duration-200"
-        title="View Payment Proof"
-      >
-        <i className="fas fa-receipt mr-1"></i>
-        View Payment
-      </button>
-      <button
-        onClick={() => handleConfirmReservation(booking)}
-        disabled={actionLoading[booking.id]}
-        className="px-3 py-1.5 bg-green-600 text-white rounded-lg text-xs font-medium hover:bg-green-700 transition-all duration-200 disabled:opacity-50"
-        title="Confirm after payment verification"
-      >
-        <i className="fas fa-check mr-1"></i>
-        Confirm
-      </button>
-      <button
-        onClick={() => handleCancelReservation(booking)}
-        disabled={actionLoading[booking.id]}
-        className="px-3 py-1.5 bg-red-600 text-white rounded-lg text-xs font-medium hover:bg-red-700 transition-all duration-200 disabled:opacity-50"
-        title="Cancel if payment is invalid"
-      >
-        <i className="fas fa-times mr-1"></i>
-        Cancel
-      </button>
-    </div>
-  )}
-  {booking.status !== 'pending' && (
-    <div className="flex gap-2">
-      {booking.paymentProof && (
-        <button
-          onClick={() => {
-            setSelectedBooking(booking);
-            setShowPaymentModal(true);
-          }}
-          className="px-3 py-1.5 bg-blue-600 text-white rounded-lg text-xs font-medium hover:bg-blue-700 transition-all duration-200"
-          title="View Payment Proof"
-        >
-          <i className="fas fa-receipt mr-1"></i>
-          View Payment
-        </button>
-      )}
-      <span className="text-xs text-textSecondary">
-        {booking.status === 'confirmed' && 'Confirmed'}
-        {booking.status === 'check-in' && 'Checked In'}
-        {booking.status === 'check-out' && 'Checked Out'}
-        {booking.status === 'cancelled' && 'Cancelled'}
-      </span>
-    </div>
-  )}
-</td>
+                            {/* Only View Payment button remains in Actions column */}
+                            {(booking.paymentProof || booking.status === 'pending') && (
+                              <button
+                                onClick={() => {
+                                  setSelectedBooking(booking);
+                                  setShowPaymentModal(true);
+                                }}
+                                className="px-3 py-1.5 text-xs font-medium text-blue-600 hover:text-blue-700 hover:bg-blue-50 rounded-lg transition-all duration-200"
+                                title="View Payment Proof"
+                              >
+                                <i className="fas fa-receipt mr-1"></i>
+                                View Payment
+                              </button>
+                            )}
+                           </td>
                           <td className="px-4 py-3 text-sm text-textSecondary">
                             {formatDateTime(booking.createdAt)}
-                          </td>
+                           </td>
                         </tr>
                       ))
                     )}
@@ -434,132 +455,254 @@ const formatDateTime = (timestamp) => {
       )}
 
       {/* Day Tour Reservations Table (Empty for now) */}
-{activeTab === 'daytour' && (
-  <div className="bg-white rounded-2xl shadow-md border border-ocean-light/10 overflow-hidden">
-    <div className="p-12 text-center">
-      <i className="fas fa-sun text-6xl text-ocean-light/30 mb-4 block"></i>
-      <h3 className="text-xl font-semibold text-textPrimary mb-2">Day Tour Reservations</h3>
-      <p className="text-textSecondary">Day tour booking system will be available soon</p>
-    </div>
-  </div>
-)}
-
-{/* Payment Proof Modal - Moved outside the day tour condition */}
-{showPaymentModal && selectedBooking && (
-  <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4" onClick={() => setShowPaymentModal(false)}>
-    <div className="bg-white rounded-2xl w-full max-w-2xl max-h-[90vh] overflow-auto p-6 shadow-2xl" onClick={(e) => e.stopPropagation()}>
-      <div className="flex justify-between items-center mb-5">
-        <h2 className="text-xl font-bold text-textPrimary font-playfair">
-          Payment Proof - {selectedBooking.bookingId}
-        </h2>
-        <button
-          onClick={() => setShowPaymentModal(false)}
-          className="w-8 h-8 rounded-full bg-ocean-ice hover:bg-ocean-light/20 text-neutral hover:text-textPrimary transition-all duration-200 flex items-center justify-center"
-        >
-          <i className="fas fa-times"></i>
-        </button>
-      </div>
-      
-      <div className="space-y-4">
-        <div className="grid grid-cols-2 gap-4 p-4 bg-ocean-ice rounded-xl">
-          <div>
-            <p className="text-xs font-semibold text-neutral uppercase tracking-wide">Guest Name</p>
-            <p className="text-textPrimary font-medium">
-              {selectedBooking.guestInfo?.firstName} {selectedBooking.guestInfo?.lastName}
-            </p>
-          </div>
-          <div>
-            <p className="text-xs font-semibold text-neutral uppercase tracking-wide">Room Type</p>
-            <p className="text-textPrimary font-medium">{selectedBooking.roomType}</p>
-          </div>
-          <div>
-            <p className="text-xs font-semibold text-neutral uppercase tracking-wide">Total Amount</p>
-            <p className="text-ocean-mid font-bold">₱{selectedBooking.totalPrice?.toLocaleString()}</p>
-          </div>
-          <div>
-            <p className="text-xs font-semibold text-neutral uppercase tracking-wide">Status</p>
-            <span className={`px-2 py-1 rounded-full text-xs font-medium ${getStatusColor(selectedBooking.status)}`}>
-              {selectedBooking.status?.charAt(0).toUpperCase() + selectedBooking.status?.slice(1)}
-            </span>
+      {activeTab === 'daytour' && (
+        <div className="bg-white rounded-2xl shadow-md border border-ocean-light/10 overflow-hidden">
+          <div className="p-12 text-center">
+            <i className="fas fa-sun text-6xl text-ocean-light/30 mb-4 block"></i>
+            <h3 className="text-xl font-semibold text-textPrimary mb-2">Day Tour Reservations</h3>
+            <p className="text-textSecondary">Day tour booking system will be available soon</p>
           </div>
         </div>
+      )}
+
+      {/* Payment Proof Modal with Confirm/Cancel buttons inside */}
+      {showPaymentModal && selectedBooking && (
+        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4" onClick={() => setShowPaymentModal(false)}>
+          <div className="bg-white rounded-2xl w-full max-w-2xl max-h-[90vh] overflow-auto p-6 shadow-2xl" onClick={(e) => e.stopPropagation()}>
+            <div className="flex justify-between items-center mb-5">
+              <h2 className="text-xl font-bold text-textPrimary font-playfair">
+                Payment Proof - {selectedBooking.bookingId}
+              </h2>
+              <button
+                onClick={() => setShowPaymentModal(false)}
+                className="w-8 h-8 rounded-full bg-ocean-ice hover:bg-ocean-light/20 text-neutral hover:text-textPrimary transition-all duration-200 flex items-center justify-center"
+              >
+                <i className="fas fa-times"></i>
+              </button>
+            </div>
+            
+            <div className="space-y-4">
+              <div className="grid grid-cols-2 gap-4 p-4 bg-ocean-ice rounded-xl">
+                <div>
+                  <p className="text-xs font-semibold text-neutral uppercase tracking-wide">Guest Name</p>
+                  <p className="text-textPrimary font-medium">
+                    {selectedBooking.guestInfo?.firstName} {selectedBooking.guestInfo?.lastName}
+                  </p>
+                </div>
+                <div>
+                  <p className="text-xs font-semibold text-neutral uppercase tracking-wide">Room Type</p>
+                  <p className="text-textPrimary font-medium">{selectedBooking.roomType}</p>
+                </div>
+                <div>
+                  <p className="text-xs font-semibold text-neutral uppercase tracking-wide">Total Amount</p>
+                  <p className="text-ocean-mid font-bold">₱{Number(selectedBooking.totalPrice).toLocaleString()}</p>
+                </div>
+                <div>
+                  <p className="text-xs font-semibold text-neutral uppercase tracking-wide">50% Down Payment</p>
+                  <p className="text-ocean-mid font-bold">₱{calculateDownPayment(selectedBooking.totalPrice).toLocaleString()}</p>
+                </div>
+                <div>
+                  <p className="text-xs font-semibold text-neutral uppercase tracking-wide">Balance</p>
+                  <p className="text-ocean-mid font-bold">
+                    {/* FIXED: Use the same calculateBalance function that works correctly */}
+                    {calculateBalance(selectedBooking)}
+                  </p>
+                </div>
+                <div>
+                  <p className="text-xs font-semibold text-neutral uppercase tracking-wide">Status</p>
+                  <span className={`px-2 py-1 rounded-full text-xs font-medium ${getStatusColor(selectedBooking.status)}`}>
+                    {selectedBooking.status?.charAt(0).toUpperCase() + selectedBooking.status?.slice(1)}
+                  </span>
+                </div>
+              </div>
+              
+              <div>
+                <label className="block text-sm font-semibold text-textPrimary mb-3">Payment Proof Image</label>
+                {selectedBooking.paymentProof ? (
+                  <div className="relative bg-ocean-pale/30 rounded-xl overflow-hidden">
+                    <img
+                      src={selectedBooking.paymentProof}
+                      alt="Payment Proof"
+                      className="w-full h-auto max-h-[500px] object-contain"
+                      onError={(e) => {
+                        console.error('Error loading image:', e);
+                        e.target.style.display = 'none';
+                        e.target.parentElement.innerHTML = '<div class="p-8 text-center"><i class="fas fa-image text-4xl text-neutral mb-2 block"></i><p class="text-textSecondary">Error loading payment proof image</p></div>';
+                      }}
+                    />
+                  </div>
+                ) : (
+                  <div className="p-8 text-center bg-ocean-ice rounded-xl">
+                    <i className="fas fa-image text-4xl text-neutral mb-2 block"></i>
+                    <p className="text-textSecondary">No payment proof uploaded</p>
+                  </div>
+                )}
+              </div>
+            </div>
+            
+            {/* Redesigned Confirm/Cancel buttons inside modal (only for pending bookings) */}
+            <div className="flex gap-3 justify-end mt-6 pt-4 border-t border-ocean-light/10">
+              <button
+                onClick={() => setShowPaymentModal(false)}
+                className="px-5 py-2.5 border border-ocean-light/20 rounded-xl text-textSecondary text-sm font-medium hover:bg-ocean-ice transition-all duration-300"
+              >
+                Close
+              </button>
+              {selectedBooking.status === 'pending' && (
+                <>
+                  <button
+                    onClick={() => {
+                      setShowPaymentModal(false);
+                      setConfirmModal({ show: true, booking: selectedBooking, type: 'confirm' });
+                    }}
+                    disabled={actionLoading[selectedBooking.id]}
+                    className="px-5 py-2.5 bg-gradient-to-r from-green-500 to-green-600 rounded-xl text-white text-sm font-medium hover:shadow-lg hover:-translate-y-0.5 transition-all duration-300 flex items-center gap-2 disabled:opacity-50"
+                  >
+                    <i className="fas fa-check"></i>
+                    Confirm Reservation
+                  </button>
+                  <button
+                    onClick={() => {
+                      setShowPaymentModal(false);
+                      setCancelModal({ show: true, booking: selectedBooking, reason: '' });
+                    }}
+                    disabled={actionLoading[selectedBooking.id]}
+                    className="px-5 py-2.5 bg-gradient-to-r from-red-500 to-red-600 rounded-xl text-white text-sm font-medium hover:shadow-lg hover:-translate-y-0.5 transition-all duration-300 flex items-center gap-2 disabled:opacity-50"
+                  >
+                    <i className="fas fa-times"></i>
+                    Cancel Reservation
+                  </button>
+                </>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Confirm Reservation Modal - Replicated from archive page */}
+      {confirmModal.show && confirmModal.booking && (
+        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-[60] p-4">
+          <div className="bg-white rounded-2xl w-full max-w-sm p-6 shadow-2xl animate-scaleIn">
+            <div className="text-center mb-5">
+              <div className="w-14 h-14 mx-auto mb-3 rounded-full bg-green-100 flex items-center justify-center">
+                <i className="fas fa-check-circle text-green-500 text-2xl"></i>
+              </div>
+              <h3 className="text-lg font-bold text-textPrimary mb-2">Confirm Reservation</h3>
+              <p className="text-textSecondary text-sm">
+                Are you sure you want to confirm this reservation for{" "}
+                <span className="font-semibold text-textPrimary">
+                  {confirmModal.booking.guestInfo?.firstName} {confirmModal.booking.guestInfo?.lastName}
+                </span>?<br />
+                <span className="text-xs mt-1 block">
+                  Booking ID: {confirmModal.booking.bookingId}<br />
+                  Room: {confirmModal.booking.roomType}
+                </span>
+              </p>
+            </div>
+            <div className="flex gap-3 justify-center">
+              <button
+                onClick={() => setConfirmModal({ show: false, booking: null, type: '' })}
+                className="px-5 py-2 border border-ocean-light/20 rounded-xl text-textSecondary text-sm font-medium hover:bg-ocean-ice transition-all duration-300"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleConfirmReservation}
+                className="px-5 py-2 bg-gradient-to-r from-green-500 to-green-600 rounded-xl text-white text-sm font-medium hover:shadow-lg hover:-translate-y-0.5 transition-all duration-300"
+              >
+                Confirm Reservation
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Cancel Reservation Modal with Reason - Replicated from archive page style */}
+      {cancelModal.show && cancelModal.booking && (
+        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-[60] p-4">
+          <div className="bg-white rounded-2xl w-full max-w-md p-6 shadow-2xl animate-scaleIn">
+            <div className="text-center mb-5">
+              <div className="w-14 h-14 mx-auto mb-3 rounded-full bg-red-100 flex items-center justify-center">
+                <i className="fas fa-times-circle text-red-500 text-2xl"></i>
+              </div>
+              <h3 className="text-lg font-bold text-textPrimary mb-2">Cancel Reservation</h3>
+              <p className="text-textSecondary text-sm">
+                Are you sure you want to cancel this reservation for{" "}
+                <span className="font-semibold text-textPrimary">
+                  {cancelModal.booking.guestInfo?.firstName} {cancelModal.booking.guestInfo?.lastName}
+                </span>?<br />
+                <span className="text-xs mt-1 block">
+                  Booking ID: {cancelModal.booking.bookingId}<br />
+                  Room: {cancelModal.booking.roomType}
+                </span>
+              </p>
+            </div>
+            
+            {/* Reason input */}
+            <div className="mb-5">
+              <label className="block text-sm font-semibold text-textPrimary mb-2">
+                Cancellation Reason <span className="text-red-500">*</span>
+              </label>
+              <textarea
+                value={cancelModal.reason}
+                onChange={(e) => setCancelModal(prev => ({ ...prev, reason: e.target.value }))}
+                placeholder="Please provide a reason for cancellation..."
+                rows="3"
+                className="w-full px-3 py-2 border border-ocean-light/20 rounded-xl text-sm focus:outline-none focus:border-red-300 focus:ring-2 focus:ring-red-200 transition-all duration-300 bg-white resize-none"
+              ></textarea>
+              <p className="text-xs text-textSecondary mt-1">
+                This reason will be logged for audit purposes.
+              </p>
+            </div>
+            
+            <div className="flex gap-3 justify-center">
+              <button
+                onClick={() => setCancelModal({ show: false, booking: null, reason: '' })}
+                className="px-5 py-2 border border-ocean-light/20 rounded-xl text-textSecondary text-sm font-medium hover:bg-ocean-ice transition-all duration-300"
+              >
+                Go Back
+              </button>
+              <button
+                onClick={handleCancelReservation}
+                disabled={!cancelModal.reason.trim()}
+                className="px-5 py-2 bg-gradient-to-r from-red-500 to-red-600 rounded-xl text-white text-sm font-medium hover:shadow-lg hover:-translate-y-0.5 transition-all duration-300 disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:translate-y-0"
+              >
+                Cancel Reservation
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      <style jsx>{`
+        @keyframes slideInRight {
+          from {
+            transform: translateX(100%);
+            opacity: 0;
+          }
+          to {
+            transform: translateX(0);
+            opacity: 1;
+          }
+        }
+        .animate-slideInRight {
+          animation: slideInRight 0.3s ease-out;
+        }
         
-        <div>
-          <label className="block text-sm font-semibold text-textPrimary mb-3">Payment Proof Image</label>
-          {selectedBooking.paymentProof ? (
-            <div className="relative bg-ocean-pale/30 rounded-xl overflow-hidden">
-              {/* Use img tag with the base64 data URL */}
-              <img
-                src={selectedBooking.paymentProof}
-                alt="Payment Proof"
-                className="w-full h-auto max-h-[500px] object-contain"
-                onError={(e) => {
-                  console.error('Error loading image:', e);
-                  e.target.style.display = 'none';
-                  e.target.parentElement.innerHTML = '<div class="p-8 text-center"><i class="fas fa-image text-4xl text-neutral mb-2 block"></i><p class="text-textSecondary">Error loading payment proof image</p></div>';
-                }}
-              />
-            </div>
-          ) : (
-            <div className="p-8 text-center bg-ocean-ice rounded-xl">
-              <i className="fas fa-image text-4xl text-neutral mb-2 block"></i>
-              <p className="text-textSecondary">No payment proof uploaded</p>
-            </div>
-          )}
-        </div>
-      </div>
-      
-      <div className="flex gap-3 justify-end mt-6 pt-4 border-t border-ocean-light/10">
-        <button
-          onClick={() => setShowPaymentModal(false)}
-          className="px-5 py-2.5 border border-ocean-light/20 rounded-xl text-textSecondary text-sm font-medium hover:bg-ocean-ice transition-all duration-300"
-        >
-          Close
-        </button>
-        {selectedBooking.status === 'pending' && (
-          <>
-            <button
-              onClick={() => {
-                setShowPaymentModal(false);
-                handleConfirmReservation(selectedBooking);
-              }}
-              className="px-5 py-2.5 bg-green-600 rounded-xl text-white text-sm font-medium hover:bg-green-700 transition-all duration-300"
-            >
-              <i className="fas fa-check mr-2"></i>
-              Confirm Reservation
-            </button>
-            <button
-              onClick={() => {
-                setShowPaymentModal(false);
-                handleCancelReservation(selectedBooking);
-              }}
-              className="px-5 py-2.5 bg-red-600 rounded-xl text-white text-sm font-medium hover:bg-red-700 transition-all duration-300"
-            >
-              <i className="fas fa-times mr-2"></i>
-              Cancel Reservation
-            </button>
-          </>
-        )}
-      </div>
-    </div>
-  </div>
-)}
-
-<style jsx>{`
-  @keyframes slideInRight {
-    from {
-      transform: translateX(100%);
-      opacity: 0;
-    }
-    to {
-      transform: translateX(0);
-      opacity: 1;
-    }
-  }
-  .animate-slideInRight {
-    animation: slideInRight 0.3s ease-out;
-  }
-`}</style>
+        @keyframes scaleIn {
+          from {
+            transform: scale(0.95);
+            opacity: 0;
+          }
+          to {
+            transform: scale(1);
+            opacity: 1;
+          }
+        }
+        .animate-scaleIn {
+          animation: scaleIn 0.2s ease-out;
+        }
+      `}</style>
     </div>
   );
 }
