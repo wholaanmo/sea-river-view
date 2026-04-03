@@ -23,6 +23,7 @@ export default function RoomCalendar() {
   const [loading, setLoading] = useState(true);
   const [bookedDates, setBookedDates] = useState({});
   const [roomDetails, setRoomDetails] = useState(null);
+  const [timeSelectionError, setTimeSelectionError] = useState('');
 
   const generateTimeSlots = () => {
     const slots = [];
@@ -156,7 +157,7 @@ export default function RoomCalendar() {
     if (period === 'PM' && hours !== 12) hours += 12;
     else if (period === 'AM' && hours === 12) hours = 0;
 
-    if (!isTimeSlotAvailable(selectedDate, hours)) {
+    if (!canFitRequiredBookingDuration(selectedDate, hours)) {
       setSelectedTime('');
     }
   }, [bookedDates, selectedDate, selectedTime, totalRoomUnits]);
@@ -181,19 +182,28 @@ export default function RoomCalendar() {
 
   const BOOKING_DURATION_HOURS = 22;
 
-  // Time slot is available if a 22-hour continuous booking can fit
-  // starting at `startHour` on `date`.
-  const isTimeSlotAvailable = (date, startHour) => {
+  // Hour is available if booked count < total room units for this type
+  const isHourAvailable = (date, hour) => {
+    if (!date) return false;
+    if (totalRoomUnits <= 0) return false;
+
+    const d = new Date(date);
+    d.setHours(hour, 0, 0, 0);
+    const dateKey = d.toDateString();
+    const bookedCount = bookedDates[dateKey]?.times?.[`${hour}:00`] || 0;
+    return bookedCount < totalRoomUnits;
+  };
+
+  // A start time is valid only if it can support a continuous 22-hour booking without overlap.
+  const canFitRequiredBookingDuration = (date, startHour) => {
     if (!date) return false;
     if (totalRoomUnits <= 0) return false;
 
     for (let offset = 0; offset < BOOKING_DURATION_HOURS; offset++) {
       const d = new Date(date);
       d.setHours(startHour + offset, 0, 0, 0);
-
       const dateKey = d.toDateString();
       const hour = d.getHours();
-
       const bookedCount = bookedDates[dateKey]?.times?.[`${hour}:00`] || 0;
       if (bookedCount >= totalRoomUnits) return false;
     }
@@ -201,14 +211,15 @@ export default function RoomCalendar() {
     return true;
   };
 
-  const hasAnyValidStartTime = (date) => {
-    for (let startHour = 0; startHour < 24; startHour++) {
-      if (isTimeSlotAvailable(date, startHour)) return true;
+  const hasAnyAvailableHour = (date) => {
+    for (let hour = 0; hour < 24; hour++) {
+      if (isHourAvailable(date, hour)) return true;
     }
     return false;
   };
 
-  // A date is selectable only if it has at least one valid full-duration start time.
+  // A date is selectable if it has at least one available hour (show times),
+  // but the 22-hour rule is enforced when selecting a time and on proceed.
   const isDateSelectable = (date) => {
     if (!date) return false;
 
@@ -221,13 +232,13 @@ export default function RoomCalendar() {
     minBookableDate.setHours(0, 0, 0, 0);
     if (date < minBookableDate) return false;
 
-    return hasAnyValidStartTime(date);
+    return hasAnyAvailableHour(date);
   };
 
-  // Date is fully booked when it cannot accommodate any valid full-duration booking start time.
+  // Date is fully booked when it has no available hours.
   const isDateFullyBooked = (date) => {
     if (!date) return false;
-    return !hasAnyValidStartTime(date);
+    return !hasAnyAvailableHour(date);
   };
 
   const isDatePast = (date) => {
@@ -249,13 +260,23 @@ export default function RoomCalendar() {
     if (!isDateSelectable(date)) return;
     setSelectedDate(date);
     setSelectedTime('');
+    setTimeSelectionError('');
   };
 
   const handleTimeSelect = (timeSlot) => {
     if (!selectedDate) return;
-    if (isTimeSlotAvailable(selectedDate, timeSlot.hour)) {
-      setSelectedTime(timeSlot.display);
+    if (!isHourAvailable(selectedDate, timeSlot.hour)) return;
+
+    if (!canFitRequiredBookingDuration(selectedDate, timeSlot.hour)) {
+      setSelectedTime('');
+      setTimeSelectionError(
+        `The selected time does not meet the required ${BOOKING_DURATION_HOURS}-hour minimum continuous booking duration. Please choose a different check-in time.`
+      );
+      return;
     }
+
+    setTimeSelectionError('');
+    setSelectedTime(timeSlot.display);
   };
 
   const handleProceed = () => {
@@ -275,7 +296,13 @@ export default function RoomCalendar() {
         }
 
         // Final validation: ensure the 22-hour continuous booking still fits.
-        if (!isTimeSlotAvailable(selectedDate, hours)) return;
+        if (!canFitRequiredBookingDuration(selectedDate, hours)) {
+          setSelectedTime('');
+          setTimeSelectionError(
+            `The selected time does not meet the required ${BOOKING_DURATION_HOURS}-hour minimum continuous booking duration. Please choose a different check-in time.`
+          );
+          return;
+        }
 
         checkInDateTime.setHours(hours, minutes, 0, 0);
       }
@@ -539,9 +566,17 @@ export default function RoomCalendar() {
                       <i className="fas fa-clock text-ocean-light"></i>
                       Available Check-in Times
                     </h3>
+                    {timeSelectionError && (
+                      <div className="mb-3 p-3 bg-red-50 border border-red-200 rounded-lg">
+                        <p className="text-xs text-red-700">
+                          <i className="fas fa-exclamation-triangle mr-1"></i>
+                          {timeSelectionError}
+                        </p>
+                      </div>
+                    )}
                     <div className="grid grid-cols-2 gap-2 max-h-[400px] overflow-y-auto">
                       {timeSlots.map((slot) => {
-                        const isAvailable = isTimeSlotAvailable(selectedDate, slot.hour);
+                        const isAvailable = isHourAvailable(selectedDate, slot.hour);
                         return (
                           <button
                             type="button"
