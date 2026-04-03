@@ -5,7 +5,7 @@ import { useState, useEffect } from 'react';
 import { useSearchParams, useRouter } from 'next/navigation';
 import GuestLayout from '@/app/guest/layout';
 import { db } from '@/lib/firebase';
-import { collection, query, where, getDocs, onSnapshot } from 'firebase/firestore';
+import { collection, query, where, doc, onSnapshot } from 'firebase/firestore';
 import Image from 'next/image';
 
 export default function RoomCalendar() {
@@ -41,12 +41,28 @@ export default function RoomCalendar() {
 
   const timeSlots = generateTimeSlots();
 
-  const totalRoomUnits =
-    Number.isFinite(totalRoomsParam) && totalRoomsParam > 0
-      ? totalRoomsParam
-      : Number.isFinite(roomDetails?.totalRooms) && roomDetails.totalRooms > 0
-        ? roomDetails.totalRooms
-        : 1;
+  const totalRoomUnits = (() => {
+    // Availability should be based on rooms not under maintenance.
+    const totalRoomsFromUrl =
+      Number.isFinite(totalRoomsParam) && totalRoomsParam >= 0 ? totalRoomsParam : null;
+    const totalRoomsFromDetails = parseInt(roomDetails?.totalRooms, 10);
+    const maintenanceRoomsFromDetails = parseInt(roomDetails?.maintenanceRooms, 10);
+
+    // Prefer the latest room doc values (real-time), fall back to URL while the room doc is loading.
+    const effectiveTotalRooms =
+      Number.isFinite(totalRoomsFromDetails) && totalRoomsFromDetails >= 0
+        ? totalRoomsFromDetails
+        : Number.isFinite(totalRoomsFromUrl) && totalRoomsFromUrl >= 0
+          ? totalRoomsFromUrl
+          : 1;
+
+    const maintenanceRooms =
+      Number.isFinite(maintenanceRoomsFromDetails) && maintenanceRoomsFromDetails > 0
+        ? maintenanceRoomsFromDetails
+        : 0;
+
+    return Math.max(0, effectiveTotalRooms - maintenanceRooms);
+  })();
 
   const toJsDate = (value) => {
     if (value == null) return null;
@@ -56,24 +72,14 @@ export default function RoomCalendar() {
     return Number.isNaN(d.getTime()) ? null : d;
   };
 
-  const fetchRoomDetails = async () => {
-    try {
-      const roomRef = collection(db, 'rooms');
-      const q = query(roomRef, where('__name__', '==', roomId));
-      const querySnapshot = await getDocs(q);
-      if (!querySnapshot.empty) {
-        const roomData = querySnapshot.docs[0].data();
-        setRoomDetails(roomData);
-      }
-    } catch (error) {
-      console.error('Error fetching room details:', error);
-    }
-  };
-
   useEffect(() => {
-    if (roomId) {
-      fetchRoomDetails();
-    }
+    if (!roomId) return;
+    const unsubscribe = onSnapshot(doc(db, 'rooms', roomId), (snap) => {
+      if (snap.exists()) setRoomDetails(snap.data());
+      else setRoomDetails(null);
+    });
+
+    return () => unsubscribe();
   }, [roomId]);
 
   useEffect(() => {
@@ -149,10 +155,8 @@ export default function RoomCalendar() {
     const period = timeMatch[3].toUpperCase();
     if (period === 'PM' && hours !== 12) hours += 12;
     else if (period === 'AM' && hours === 12) hours = 0;
-    const dateKey = selectedDate.toDateString();
-    const timesObj = bookedDates[dateKey]?.times || {};
-    const bookedCount = timesObj[`${hours}:00`] || 0;
-    if (bookedCount >= totalRoomUnits) {
+
+    if (!isTimeSlotAvailable(selectedDate, hours)) {
       setSelectedTime('');
     }
   }, [bookedDates, selectedDate, selectedTime, totalRoomUnits]);
@@ -175,22 +179,36 @@ export default function RoomCalendar() {
     return days;
   };
 
-  // At least one of the 24 hourly slots still has inventory
-  const hasAnyAvailableSlot = (date) => {
-    const dateKey = date.toDateString();
-    const timesObj = bookedDates[dateKey]?.times || {};
+  const BOOKING_DURATION_HOURS = 22;
 
-    for (let hour = 0; hour < 24; hour++) {
-      const bookedCount = timesObj[`${hour}:00`] || 0;
-      if (bookedCount < totalRoomUnits) {
-        return true;
-      }
+  // Time slot is available if a 22-hour continuous booking can fit
+  // starting at `startHour` on `date`.
+  const isTimeSlotAvailable = (date, startHour) => {
+    if (!date) return false;
+    if (totalRoomUnits <= 0) return false;
+
+    for (let offset = 0; offset < BOOKING_DURATION_HOURS; offset++) {
+      const d = new Date(date);
+      d.setHours(startHour + offset, 0, 0, 0);
+
+      const dateKey = d.toDateString();
+      const hour = d.getHours();
+
+      const bookedCount = bookedDates[dateKey]?.times?.[`${hour}:00`] || 0;
+      if (bookedCount >= totalRoomUnits) return false;
     }
 
+    return true;
+  };
+
+  const hasAnyValidStartTime = (date) => {
+    for (let startHour = 0; startHour < 24; startHour++) {
+      if (isTimeSlotAvailable(date, startHour)) return true;
+    }
     return false;
   };
 
-  // A date is selectable if at least one hour has available rooms
+  // A date is selectable only if it has at least one valid full-duration start time.
   const isDateSelectable = (date) => {
     if (!date) return false;
 
@@ -203,30 +221,13 @@ export default function RoomCalendar() {
     minBookableDate.setHours(0, 0, 0, 0);
     if (date < minBookableDate) return false;
 
-    return hasAnyAvailableSlot(date);
+    return hasAnyValidStartTime(date);
   };
 
+  // Date is fully booked when it cannot accommodate any valid full-duration booking start time.
   const isDateFullyBooked = (date) => {
     if (!date) return false;
-    const dateKey = date.toDateString();
-    const timesObj = bookedDates[dateKey]?.times || {};
-    for (let hour = 0; hour < 24; hour++) {
-      const bookedCount = timesObj[`${hour}:00`] || 0;
-      if (bookedCount < totalRoomUnits) {
-        return false;
-      }
-    }
-    return true;
-  };
-
-  // A time slot is available if booked count < total room units for this type
-  const isTimeSlotAvailable = (date, hour) => {
-    if (!date) return false;
-    const dateKey = date.toDateString();
-    const timesObj = bookedDates[dateKey]?.times || {};
-    const timeKey = `${hour}:00`;
-    const bookedCount = timesObj[timeKey] || 0;
-    return bookedCount < totalRoomUnits;
+    return !hasAnyValidStartTime(date);
   };
 
   const isDatePast = (date) => {
@@ -272,6 +273,9 @@ export default function RoomCalendar() {
         } else if (period === 'AM' && hours === 12) {
           hours = 0;
         }
+
+        // Final validation: ensure the 22-hour continuous booking still fits.
+        if (!isTimeSlotAvailable(selectedDate, hours)) return;
 
         checkInDateTime.setHours(hours, minutes, 0, 0);
       }

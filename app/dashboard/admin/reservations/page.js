@@ -5,6 +5,7 @@ import { useState, useEffect } from 'react';
 import { db } from '../../../../lib/firebase';
 import { collection, query, orderBy, onSnapshot, where, updateDoc, doc, getDocs } from 'firebase/firestore';
 import { logAdminAction } from '../../../../lib/auditLogger';
+import { sendConfirmationEmail, sendCancellationEmail } from '../../../../lib/emailService';
 
 export default function AdminReservations() {
   const [activeTab, setActiveTab] = useState('rooms');
@@ -146,7 +147,7 @@ const getStatusColor = (status) => {
     }
   };
 
-  // Updated confirm reservation function with confirmation modal
+  // Updated confirm reservation function with confirmation modal and email notification
   const handleConfirmReservation = async () => {
     const booking = confirmModal.booking;
     if (!booking) return;
@@ -165,13 +166,22 @@ const getStatusColor = (status) => {
         updatedAt: new Date().toISOString()
       });
 
+      // Send confirmation email to guest
+      const emailResult = await sendConfirmationEmail(booking);
+      if (emailResult.success) {
+        console.log('Confirmation email sent successfully');
+      } else {
+        console.warn('Failed to send confirmation email:', emailResult.error);
+        // Still show success for booking, but log the email failure
+      }
+
       await logAdminAction({
         action: 'Confirmed Reservation',
         module: 'Reservations',
         details: `Confirmed booking ${booking.bookingId} for ${booking.guestInfo?.firstName} ${booking.guestInfo?.lastName} - ${booking.roomType}`
       });
 
-      showNotification(`Booking ${booking.bookingId} has been confirmed.`, 'success');
+      showNotification(`Booking ${booking.bookingId} has been confirmed. A confirmation email has been sent to the guest.`, 'success');
       setShowPaymentModal(false); // Close modal on success
       setConfirmModal({ show: false, booking: null, type: '' });
     } catch (error) {
@@ -182,7 +192,7 @@ const getStatusColor = (status) => {
     }
   };
 
-  // Updated cancel reservation function with reason
+  // Updated cancel reservation function with reason and email notification
   const handleCancelReservation = async () => {
     const booking = cancelModal.booking;
     const reason = cancelModal.reason;
@@ -211,13 +221,21 @@ const getStatusColor = (status) => {
         updatedAt: new Date().toISOString()
       });
 
+      // Send cancellation email to guest
+      const emailResult = await sendCancellationEmail(booking, reason, 'admin');
+      if (emailResult.success) {
+        console.log('Cancellation email sent successfully');
+      } else {
+        console.warn('Failed to send cancellation email:', emailResult.error);
+      }
+
       await logAdminAction({
         action: 'Cancelled Reservation',
         module: 'Reservations',
         details: `Cancelled booking ${booking.bookingId} for ${booking.guestInfo?.firstName} ${booking.guestInfo?.lastName} - ${booking.roomType}. Reason: ${reason}`
       });
 
-      showNotification(`Booking ${booking.bookingId} has been cancelled.`, 'success');
+      showNotification(`Booking ${booking.bookingId} has been cancelled. A cancellation email has been sent to the guest.`, 'success');
       setShowPaymentModal(false); // Close modal on success
       setCancelModal({ show: false, booking: null, reason: '' });
     } catch (error) {
@@ -504,7 +522,6 @@ const getStatusColor = (status) => {
                 <div>
                   <p className="text-xs font-semibold text-neutral uppercase tracking-wide">Balance</p>
                   <p className="text-ocean-mid font-bold">
-                    {/* FIXED: Use the same calculateBalance function that works correctly */}
                     {calculateBalance(selectedBooking)}
                   </p>
                 </div>

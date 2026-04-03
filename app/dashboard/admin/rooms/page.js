@@ -1188,7 +1188,7 @@ export default function AdminRooms() {
                     actionLoading || 
                     (modalType === 'add' && isFormIncomplete()) ||
                     (modalType === 'edit' && (!hasChanges))
-                      ? 'bg-neutral cursor-not-allowed'
+                      ? 'bg-gray-200 text-gray-700 cursor-not-allowed opacity-50 hover:shadow-none'
                       : 'bg-gradient-to-r from-ocean-mid to-ocean-light hover:shadow-lg hover:-translate-y-0.5'
                   }`}
                 >

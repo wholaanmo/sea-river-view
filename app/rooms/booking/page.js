@@ -1128,7 +1128,7 @@ export default function BookingPage() {
               </div>
               <h2 className="text-2xl font-bold text-textPrimary mb-2">Booking Confirmed!</h2>
               <p className="text-textSecondary mb-4">
-                Thank you for your booking. We'll send a confirmation email to {bookingData.email}
+                Thank you for your booking! A confirmation email will be sent to {bookingData.email}. You can also track your reservation anytime through the Reservation Tracker page.
               </p>
               
               {/* Booking Reference with Copy Button */}

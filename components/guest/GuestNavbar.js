@@ -27,7 +27,6 @@ export default function GuestNavbar() {
     { href: '/', label: 'Home' },
     { href: '/rooms', label: 'Rooms' },
     { href: '/day-tour', label: 'Day Tour' },
-    { href: '/calendar', label: 'Calendar' },
     { href: '/reservation-tracker', label: 'Reservation Tracker' },
     { href: '/feedback', label: 'Feedback' },
   ];

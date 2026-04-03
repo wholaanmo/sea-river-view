@@ -33,24 +33,19 @@ export default function AdminNavbar({ toggleSidebar, sidebarOpen }) {
     fetchUserData();
   }, []);
 
-  // Real-time listener for ALL bank transfer requests (no status filter)
-  // Includes 'read' field to track unread status
+  // Real-time listener for bank transfer requests
   useEffect(() => {
     const bankRequestsRef = collection(db, 'bank_requests');
-    const q = query(
-      bankRequestsRef,
-      orderBy('createdAt', 'desc')
-    );
+    const q = query(bankRequestsRef, orderBy('createdAt', 'desc'));
     
     const unsubscribe = onSnapshot(q, (querySnapshot) => {
       const requests = [];
-      let unread = 0;
       querySnapshot.forEach((doc) => {
         const data = doc.data();
         const isRead = data.read === true;
-        if (!isRead) unread++;
         requests.push({
           id: doc.id,
+          type: 'bank_transfer',
           guestName: data.guestName,
           totalPrice: data.totalPrice,
           createdAt: data.createdAt,
@@ -59,8 +54,11 @@ export default function AdminNavbar({ toggleSidebar, sidebarOpen }) {
           bookingId: data.bookingId
         });
       });
-      setUnreadCount(unread);
-      setNotifications(requests);
+      setNotifications(prev => {
+        const combined = [...prev.filter(n => n.type !== 'bank_transfer'), ...requests];
+        combined.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+        return combined;
+      });
     }, (error) => {
       console.error('Error fetching bank transfer requests:', error);
     });
@@ -68,21 +66,83 @@ export default function AdminNavbar({ toggleSidebar, sidebarOpen }) {
     return () => unsubscribe();
   }, []);
 
+  // Real-time listener for guest cancellation notifications
+  useEffect(() => {
+    const cancellationsRef = collection(db, 'guest_cancellations');
+    const q = query(cancellationsRef, orderBy('cancelledAt', 'desc'));
+    
+    const unsubscribe = onSnapshot(q, (querySnapshot) => {
+      const cancellations = [];
+      querySnapshot.forEach((doc) => {
+        const data = doc.data();
+        const isRead = data.read === true;
+        cancellations.push({
+          id: doc.id,
+          type: 'cancellation',
+          guestName: data.guestName,
+          bookingId: data.bookingId,
+          roomType: data.roomType,
+          createdAt: data.cancelledAt,
+          read: isRead,
+        });
+      });
+      setNotifications(prev => {
+        const combined = [...prev.filter(n => n.type !== 'cancellation'), ...cancellations];
+        combined.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+        return combined;
+      });
+    }, (error) => {
+      console.error('Error fetching guest cancellations:', error);
+    });
+    
+    return () => unsubscribe();
+  }, []);
+
+  // Recalculate unread count whenever notifications change
+  useEffect(() => {
+    const count = notifications.filter(n => !n.read).length;
+    setUnreadCount(count);
+  }, [notifications]);
+
+  // Mark a single notification as read
+  const markNotificationAsRead = async (notification) => {
+    if (notification.read) return;
+
+    try {
+      const collectionName = notification.type === 'bank_transfer' ? 'bank_requests' : 'guest_cancellations';
+      const docRef = doc(db, collectionName, notification.id);
+      await updateDoc(docRef, { read: true });
+    } catch (error) {
+      console.error('Error marking notification as read:', error);
+    }
+  };
+
   // Mark all notifications as read when dropdown is opened
   const markAllAsRead = async () => {
     if (unreadCount === 0) return;
     try {
       const batch = writeBatch(db);
+      
+      // Mark bank requests as read
       const bankRequestsRef = collection(db, 'bank_requests');
-      const q = query(bankRequestsRef, orderBy('createdAt', 'desc'));
-      const snapshot = await getDocs(q);
-      snapshot.forEach((doc) => {
+      const bankSnapshot = await getDocs(query(bankRequestsRef));
+      bankSnapshot.forEach((doc) => {
         const data = doc.data();
         if (data.read !== true) {
-          const docRef = doc.ref;
-          batch.update(docRef, { read: true });
+          batch.update(doc.ref, { read: true });
         }
       });
+      
+      // Mark guest cancellations as read
+      const cancellationsRef = collection(db, 'guest_cancellations');
+      const cancelSnapshot = await getDocs(query(cancellationsRef));
+      cancelSnapshot.forEach((doc) => {
+        const data = doc.data();
+        if (data.read !== true) {
+          batch.update(doc.ref, { read: true });
+        }
+      });
+      
       await batch.commit();
     } catch (error) {
       console.error('Error marking notifications as read:', error);
@@ -91,7 +151,6 @@ export default function AdminNavbar({ toggleSidebar, sidebarOpen }) {
 
   const handleToggleNotifications = async () => {
     if (!showNotifications) {
-      // Opening dropdown: mark all as read
       await markAllAsRead();
     }
     setShowNotifications(!showNotifications);
@@ -116,6 +175,14 @@ export default function AdminNavbar({ toggleSidebar, sidebarOpen }) {
         </div>
 
         <div className="flex items-center gap-4">
+          {/* Role and Name Badge */}
+          <div className="flex items-center gap-2 px-4 py-2 rounded-full bg-gradient-to-r from-blue-white to-white shadow-sm border border-ocean-light/10 hover:shadow-md transition-all duration-200">
+            <i className="fas fa-user-circle text-ocean-light text-base"></i>
+            <span className="text-sm font-semibold text-ocean-deep">
+              {userRole}: {userName}
+            </span>
+          </div>
+
           {/* Notification Bell */}
           <div className="relative">
             <button
@@ -151,21 +218,42 @@ export default function AdminNavbar({ toggleSidebar, sidebarOpen }) {
                     </div>
                   ) : (
                     notifications.map((notification) => (
-                      <div key={notification.id} className={`border-b border-ocean-light/10 p-4 hover:bg-ocean-ice/30 transition-colors ${!notification.read ? 'bg-ocean-ice/10' : ''}`}>
+                      <div 
+                        key={notification.id} 
+                        onClick={() => markNotificationAsRead(notification)}
+                        className={`border-b border-ocean-light/10 p-4 hover:bg-ocean-ice/30 transition-colors cursor-pointer ${!notification.read ? 'bg-ocean-ice/10' : ''}`}
+                      >
                         <div className="flex items-start gap-3">
-                          <div className="w-8 h-8 bg-amber-100 rounded-full flex items-center justify-center flex-shrink-0">
-                            <i className="fas fa-university text-amber-600 text-sm"></i>
+                          <div className={`w-8 h-8 rounded-full flex items-center justify-center flex-shrink-0 ${
+                            notification.type === 'bank_transfer' ? 'bg-amber-100' : 'bg-red-100'
+                          }`}>
+                            <i className={`${
+                              notification.type === 'bank_transfer' ? 'fas fa-university text-amber-600' : 'fas fa-times-circle text-red-600'
+                            } text-sm`}></i>
                           </div>
                           <div className="flex-1">
-                            <p className="text-sm font-semibold text-textPrimary">
-                              Bank Transfer Request
-                            </p>
-                            <p className="text-xs text-textSecondary mt-1">
-                              {notification.guestName} requested bank transfer for {notification.roomType || 'room'}
-                            </p>
-                            <p className="text-xs text-ocean-mid mt-1 font-medium">
-                              ₱{notification.totalPrice?.toLocaleString()}
-                            </p>
+                            {notification.type === 'bank_transfer' ? (
+                              <>
+                                <p className="text-sm font-semibold text-textPrimary">
+                                  Bank Transfer Request
+                                </p>
+                                <p className="text-xs text-textSecondary mt-1">
+                                  {notification.guestName} requested bank transfer for {notification.roomType || 'room'}
+                                </p>
+                                <p className="text-xs text-ocean-mid mt-1 font-medium">
+                                  ₱{notification.totalPrice?.toLocaleString()}
+                                </p>
+                              </>
+                            ) : (
+                              <>
+                                <p className="text-sm font-semibold text-textPrimary">
+                                  Guest Cancellation
+                                </p>
+                                <p className="text-xs text-textSecondary mt-1">
+                                  {notification.guestName} cancelled reservation {notification.bookingId} ({notification.roomType})
+                                </p>
+                              </>
+                            )}
                             <p className="text-xs text-gray-400 mt-1">
                               {new Date(notification.createdAt).toLocaleString()}
                             </p>
@@ -175,26 +263,12 @@ export default function AdminNavbar({ toggleSidebar, sidebarOpen }) {
                     ))
                   )}
                 </div>
-                <div className="bg-ocean-ice/50 px-4 py-2 border-t border-ocean-light/10">
-                  <a
-                    href="/dashboard/admin/payment"
-                    className="text-xs text-ocean-mid hover:underline block text-center"
-                  >
-                    Go to Payment Settings →
-                  </a>
-                </div>
+                {/* Removed "Go to Payment Settings" footer */}
               </div>
             )}
           </div>
           
-          {/* Role and Name Badge */}
-          <div className="flex items-center gap-2 px-4 py-2 rounded-full bg-gradient-to-r from-blue-white to-white shadow-sm border border-ocean-light/10 hover:shadow-md transition-all duration-200">
-            <i className="fas fa-user-circle text-ocean-light text-base"></i>
-            <span className="text-sm font-semibold text-ocean-deep">
-              {userRole}: {userName}
-            </span>
-          </div>
-          
+          {/* Hamburger Menu Button */}
           <button
             onClick={toggleSidebar}
             className="flex items-center justify-center w-10 h-10 rounded-full bg-gradient-to-r from-blue-white to-white text-ocean-light border border-ocean-light/10 hover:bg-gradient-to-r hover:from-ocean-light hover:to-ocean-mid hover:text-white transition-all duration-300 hover:rotate-180 shadow-sm"
