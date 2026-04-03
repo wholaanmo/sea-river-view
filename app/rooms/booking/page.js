@@ -5,7 +5,7 @@ import { useState, useEffect } from 'react';
 import { useSearchParams, useRouter } from 'next/navigation';
 import GuestLayout from '@/app/guest/layout';
 import { db } from '@/lib/firebase';
-import { collection, addDoc, serverTimestamp, updateDoc, doc, getDoc, query, where, getDocs } from 'firebase/firestore';
+import { collection, addDoc, serverTimestamp, updateDoc, doc, getDoc, query, where, getDocs, onSnapshot } from 'firebase/firestore';
 
 export default function BookingPage() {
   const searchParams = useSearchParams();
@@ -13,9 +13,16 @@ export default function BookingPage() {
   const roomId = searchParams.get('roomId');
   const roomType = searchParams.get('roomType');
   const price = parseFloat(searchParams.get('price'));
-  const maxCapacity = parseInt(searchParams.get('capacity'));
+  // Fix: Properly parse maxCapacity with fallback and validation
+  const maxCapacityParam = searchParams.get('maxCapacity');
+  const maxCapacity = maxCapacityParam && !isNaN(parseInt(maxCapacityParam)) ? parseInt(maxCapacityParam) : 0;
   const totalRooms = parseInt(searchParams.get('totalRooms') || '1');
   const checkInDateParam = searchParams.get('checkIn');
+  const [notifyingResort, setNotifyingResort] = useState(false);
+  const [bankRequestSent, setBankRequestSent] = useState(false);
+  const [requestedBankInfo, setRequestedBankInfo] = useState(null);
+  const [modalNotification, setModalNotification] = useState(null);
+  const [bankRequestId, setBankRequestId] = useState(null);
 
   const [step, setStep] = useState(1);
   const [bookingData, setBookingData] = useState({
@@ -40,6 +47,7 @@ export default function BookingPage() {
   const [totalPrice, setTotalPrice] = useState(price);
   const [submitting, setSubmitting] = useState(false);
   const [checkOutTime, setCheckOutTime] = useState('');
+  const [roomDetails, setRoomDetails] = useState(null);
   
   // Add availability status state at component level
   const [availabilityStatus, setAvailabilityStatus] = useState({
@@ -47,6 +55,127 @@ export default function BookingPage() {
     isAvailable: true,
     message: ''
   });
+
+  const [paymentMethod, setPaymentMethod] = useState('gcash');
+  const [paymentSettings, setPaymentSettings] = useState({
+    gcashQRCode: '',
+    bankAccounts: []
+  });
+  const [bankDetailsProvided, setBankDetailsProvided] = useState(null);
+  const [selectedBankAccount, setSelectedBankAccount] = useState(null);
+  const [showBankSelection, setShowBankSelection] = useState(false);
+  const [downPaymentAmount, setDownPaymentAmount] = useState(0);
+
+  // Calculate down payment (50% of total price)
+  useEffect(() => {
+    setDownPaymentAmount(totalPrice * 0.5);
+  }, [totalPrice]);
+
+  useEffect(() => {
+    const fetchPaymentSettings = async () => {
+      try {
+        const settingsRef = doc(db, 'settings', 'payment');
+        const settingsDoc = await getDoc(settingsRef);
+        if (settingsDoc.exists()) {
+          const data = settingsDoc.data();
+          setPaymentSettings({
+            gcashQRCode: data.gcashQRCode || '',
+            bankAccounts: data.bankAccounts || []
+          });
+        }
+      } catch (error) {
+        console.error('Error fetching payment settings:', error);
+      }
+    };
+    
+    fetchPaymentSettings();
+  }, []);
+
+  // Also listen for bank details provided for this booking
+  useEffect(() => {
+    if (bookingData.bookingId) {
+      const fetchBankDetails = async () => {
+        try {
+          const bookingRef = doc(db, 'bookings', bookingData.bookingId);
+          const bookingDoc = await getDoc(bookingRef);
+          if (bookingDoc.exists() && bookingDoc.data().bankDetailsProvided) {
+            setBankDetailsProvided(bookingDoc.data().bankDetailsProvided);
+          }
+        } catch (error) {
+          console.error('Error fetching bank details:', error);
+        }
+      };
+      fetchBankDetails();
+    }
+  }, [bookingData.bookingId]);
+
+  // Real-time listener for bank request document to get provided bank details from admin
+useEffect(() => {
+  if (!bankRequestId) return;
+  
+  const bankRequestRef = doc(db, 'bank_requests', bankRequestId);
+  
+  const unsubscribe = onSnapshot(bankRequestRef, (docSnapshot) => {
+    if (docSnapshot.exists()) {
+      const data = docSnapshot.data();
+      // If admin has provided bank details, update the guest side
+      if (data.providedBankDetails && !bankDetailsProvided) {
+        setBankDetailsProvided(data.providedBankDetails);
+        setModalNotification({ message: 'Bank details have been provided by the resort! You can now proceed with payment.', type: 'success' });
+      }
+    }
+  }, (error) => {
+    console.error('Error listening for bank request:', error);
+  });
+  
+  return () => unsubscribe();
+}, [bankRequestId, bankDetailsProvided]);
+
+  // Real-time listener for bank details provided by admin
+useEffect(() => {
+  if (!bookingData.bookingId) return;
+  
+  const bookingRef = doc(db, 'bookings', bookingData.bookingId);
+  
+  const unsubscribe = onSnapshot(bookingRef, (docSnapshot) => {
+    if (docSnapshot.exists()) {
+      const data = docSnapshot.data();
+      // If admin has provided bank details, update the guest side
+      if (data.bankDetailsProvided && !bankDetailsProvided) {
+        setBankDetailsProvided(data.bankDetailsProvided);
+        showNotification('Bank details have been provided by the resort! You can now proceed with payment.', 'success');
+      }
+    }
+  }, (error) => {
+    console.error('Error listening for bank details:', error);
+  });
+  
+  return () => unsubscribe();
+}, [bookingData.bookingId]);
+
+  // Fetch room details to get accurate max capacity from database
+  useEffect(() => {
+    const fetchRoomDetails = async () => {
+      if (roomId) {
+        try {
+          const roomDoc = await getDoc(doc(db, 'rooms', roomId));
+          if (roomDoc.exists()) {
+            const roomData = roomDoc.data();
+            // Use capacityMax from database if available, otherwise use URL param
+            const dbMaxCapacity = roomData.capacityMax || roomData.capacity || maxCapacity;
+            if (dbMaxCapacity && dbMaxCapacity !== maxCapacity) {
+              setBookingData(prev => ({ ...prev, maxCapacity: dbMaxCapacity }));
+            }
+            setRoomDetails(roomData);
+          }
+        } catch (error) {
+          console.error('Error fetching room details:', error);
+        }
+      }
+    };
+    
+    fetchRoomDetails();
+  }, [roomId, maxCapacity]);
 
   // Define checkAvailability function at component level
   const checkAvailability = async () => {
@@ -73,7 +202,7 @@ export default function BookingPage() {
       const roomData = roomDoc.data();
       const totalRoomsAvailable = roomData.totalRooms || 1;
       
-      // Check existing bookings (pending, confirmed, check-in)
+      // Only check pending, confirmed, and check-in statuses (cancelled bookings are ignored)
       const q = query(
         bookingsRef,
         where('roomId', '==', bookingData.roomId),
@@ -157,10 +286,20 @@ export default function BookingPage() {
   };
 
   const validateGuests = () => {
-    if (bookingData.guests > maxCapacity) {
-      setErrors(prev => ({ ...prev, guests: `Number of guests cannot exceed ${maxCapacity}` }));
+    // Use maxCapacity for validation (maximum allowed guests)
+    const guestValue = parseInt(bookingData.guests);
+    const currentMaxCapacity = bookingData.maxCapacity;
+    
+    if (isNaN(guestValue) || guestValue < 1) {
+      setErrors(prev => ({ ...prev, guests: 'At least 1 guest is required' }));
       return false;
     }
+    
+    if (currentMaxCapacity && guestValue > currentMaxCapacity) {
+      setErrors(prev => ({ ...prev, guests: `Number of guests cannot exceed ${currentMaxCapacity}` }));
+      return false;
+    }
+    
     setErrors(prev => ({ ...prev, guests: '' }));
     return true;
   };
@@ -189,17 +328,92 @@ export default function BookingPage() {
 
   const handleInputChange = (field, value) => {
     setBookingData(prev => ({ ...prev, [field]: value }));
+    
     if (field === 'guests') {
-      if (value > maxCapacity) {
-        setErrors(prev => ({ ...prev, guests: `Number of guests cannot exceed ${maxCapacity}` }));
+      const guestValue = parseInt(value);
+      const currentMaxCapacity = bookingData.maxCapacity;
+      
+      // Validate on change
+      if (isNaN(guestValue) || guestValue < 1) {
+        setErrors(prev => ({ ...prev, guests: 'At least 1 guest is required' }));
+      } else if (currentMaxCapacity && guestValue > currentMaxCapacity) {
+        setErrors(prev => ({ ...prev, guests: `Number of guests cannot exceed ${currentMaxCapacity}` }));
       } else {
         setErrors(prev => ({ ...prev, guests: '' }));
       }
     }
+    
     if (errors[field]) {
       setErrors(prev => ({ ...prev, [field]: '' }));
     }
   };
+
+const handleNotifyResort = async () => {
+  if (!selectedBankAccount) {
+    setModalNotification({ message: 'Please select a bank account first', type: 'error' });
+    return;
+  }
+  
+  setNotifyingResort(true);
+  try {
+    // Store the request in state
+    setRequestedBankInfo({
+      bankName: selectedBankAccount.bankName,
+      accountName: selectedBankAccount.accountName,
+      accountNumber: selectedBankAccount.accountNumber,
+      requestedAt: new Date().toISOString()
+    });
+    
+    // Create a bank request document in a separate collection
+    const bankRequestsRef = collection(db, 'bank_requests');
+    const docRef = await addDoc(bankRequestsRef, {
+      guestName: `${bookingData.firstName} ${bookingData.lastName}`,
+      guestEmail: bookingData.email,
+      guestPhone: bookingData.phone,
+      roomType: bookingData.roomType,
+      roomId: bookingData.roomId,
+      checkIn: bookingData.checkIn,
+      checkOut: bookingData.checkOut,
+      nights: bookingData.nights,
+      totalPrice: totalPrice,
+      downPayment: downPaymentAmount,
+      requestedBank: {
+        bankName: selectedBankAccount.bankName,
+        accountName: selectedBankAccount.accountName,
+        accountNumber: selectedBankAccount.accountNumber
+      },
+      status: 'pending',
+      createdAt: new Date().toISOString(),
+      read: false
+    });
+    
+    // Store the bank request ID for real-time listener
+    setBankRequestId(docRef.id);
+    
+    setBankRequestSent(true);
+    setModalNotification({ message: 'Request sent to resort! You will receive bank details shortly.', type: 'success' });
+    
+    // Clear the bank selection UI
+    setShowBankSelection(false);
+    setSelectedBankAccount(null);
+    
+  } catch (error) {
+    console.error('Error sending bank transfer request:', error);
+    setModalNotification({ message: 'Failed to send request. Please try again.', type: 'error' });
+  } finally {
+    setNotifyingResort(false);
+  }
+};
+
+const showNotification = (message, type = 'success') => {
+  // Store notification in state to show in modal
+  setModalNotification({ message, type });
+  // Auto-hide after 3 seconds
+  setTimeout(() => {
+    setModalNotification(null);
+  }, 3000);
+};
+
 
   const handleNextStep = () => {
     if (step === 1) {
@@ -217,7 +431,7 @@ export default function BookingPage() {
 
   const handlePreviousStep = () => {
     if (step === 1) {
-      router.push(`/rooms/calendar?roomId=${roomId}&roomType=${encodeURIComponent(roomType)}&price=${price}&capacity=${maxCapacity}&totalRooms=${totalRooms}`);
+      router.push(`/rooms/calendar?roomId=${roomId}&roomType=${encodeURIComponent(roomType)}&price=${price}&capacity=${bookingData.maxCapacity}&totalRooms=${totalRooms}`);
     } else {
       setStep(step - 1);
     }
@@ -295,6 +509,8 @@ export default function BookingPage() {
         nights: bookingData.nights,
         guests: bookingData.guests,
         totalPrice,
+        downPayment: downPaymentAmount,
+        remainingBalance: totalPrice - downPaymentAmount,
         checkIn: bookingData.checkIn,
         checkOut: bookingData.checkOut,
         guestInfo: {
@@ -304,12 +520,18 @@ export default function BookingPage() {
           phone: bookingData.phone
         },
         status: 'pending',
+        paymentMethod: paymentMethod,
         paymentProof: bookingData.paymentProof,
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
         type: 'room',
         numberOfRooms: 1
       };
+      
+      // Add bank details if provided
+      if (bankDetailsProvided) {
+        booking.bankDetailsProvided = bankDetailsProvided;
+      }
       
       const docRef = await addDoc(collection(db, 'bookings'), booking);
       setBookingData(prev => ({ ...prev, bookingId: docRef.id }));
@@ -365,6 +587,9 @@ export default function BookingPage() {
     );
   }
 
+  // Get the current max capacity for display (from bookingData state, which may have been updated from DB)
+  const currentMaxCapacity = bookingData.maxCapacity;
+
   return (
     <GuestLayout>
       <div className="min-h-screen bg-gradient-to-br from-ocean-ice to-blue-white py-12 flex items-center justify-center">
@@ -400,88 +625,97 @@ export default function BookingPage() {
             <div className="bg-white rounded-2xl shadow-lg p-8">
               <h2 className="text-2xl font-bold text-textPrimary mb-6">Step 1: Select Dates & Guests</h2>
               
-    {availabilityStatus.checking && (
-      <div className="mb-5 p-4 bg-ocean-ice rounded-xl">
-        <div className="flex items-center gap-2 text-ocean-mid">
-          <i className="fas fa-spinner fa-spin"></i>
-          <span className="font-medium">Checking availability...</span>
-        </div>
-      </div>
-    )}
-    
-    <div className="space-y-5">
-      <div className="p-5 bg-ocean-ice rounded-xl">
-        <label className="block text-sm font-semibold text-textPrimary mb-2">Check-in Date & Time</label>
-        <p className="text-lg font-medium text-ocean-mid">{formatDateTime(bookingData.checkIn)}</p>
-      </div>
-      
-      <div>
-        <label className="block text-sm font-semibold text-textPrimary mb-2">Number of Nights</label>
-        <input
-          type="number"
-          min="1"
-          max="30"
-          value={bookingData.nights}
-          onChange={(e) => handleInputChange('nights', parseInt(e.target.value))}
-          className="w-full px-4 py-2 border border-ocean-light/20 rounded-lg focus:outline-none focus:border-ocean-light"
-        />
-      </div>
-      
-      <div>
-        <label className="block text-sm font-semibold text-textPrimary mb-2">Number of Guests *</label>
-        <input
-          type="number"
-          min="1"
-          max={maxCapacity}
-          value={bookingData.guests}
-          onChange={(e) => handleInputChange('guests', parseInt(e.target.value))}
-          className={`w-full px-4 py-2 border ${errors.guests ? 'border-red-500' : 'border-ocean-light/20'} rounded-lg focus:outline-none focus:border-ocean-light`}
-        />
-        {errors.guests && <p className="text-red-500 text-sm mt-1">{errors.guests}</p>}
-        <p className="text-xs text-textSecondary mt-1">Maximum capacity: {maxCapacity} guests</p>
-      </div>
-      
-      {bookingData.checkOut && (
-        <div className="p-5 bg-ocean-ice rounded-xl">
-          <label className="block text-sm font-semibold text-textPrimary mb-2">Check-out Date & Time</label>
-          <p className="text-lg font-medium text-ocean-mid">
-            {formatDateOnly(bookingData.checkOut)} at {checkOutTime}
-          </p>
-          <p className="text-xs text-textSecondary mt-1">
-            Check-out time is 2 hours earlier than check-in time
-          </p>
-        </div>
-      )}
-      
-      <div className="p-5 bg-gradient-to-r from-ocean-ice to-blue-white rounded-xl">
-        <label className="block text-sm font-semibold text-textPrimary mb-2">Total Price</label>
-        <p className="text-3xl font-bold text-ocean-mid">₱{totalPrice.toLocaleString()}</p>
-        <p className="text-xs text-textSecondary">₱{price.toLocaleString()} x {bookingData.nights} night(s)</p>
-      </div>
-    </div>
-    
-    <div className="flex gap-3 mt-6">
-      <button
-        onClick={handlePreviousStep}
-        className="flex-1 py-3 border border-ocean-light/20 rounded-xl text-textSecondary font-medium hover:bg-ocean-ice transition-all duration-300"
-      >
-        <i className="fas fa-arrow-left mr-2"></i>
-        Back
-      </button>
-      <button
-        onClick={handleNextStep}
-        disabled={!availabilityStatus.isAvailable || availabilityStatus.checking}
-        className={`flex-1 py-3 rounded-xl font-medium transition-all duration-300 ${
-          availabilityStatus.isAvailable && !availabilityStatus.checking
-            ? 'bg-gradient-to-r from-ocean-mid to-ocean-light text-white hover:shadow-lg'
-            : 'bg-gray-200 text-gray-500 cursor-not-allowed'
-        }`}
-      >
-        Continue to Guest Details
-      </button>
-    </div>
-  </div>
-)}
+              {availabilityStatus.checking && (
+                <div className="mb-5 p-4 bg-ocean-ice rounded-xl">
+                  <div className="flex items-center gap-2 text-ocean-mid">
+                    <i className="fas fa-spinner fa-spin"></i>
+                    <span className="font-medium">Checking availability...</span>
+                  </div>
+                </div>
+              )}
+              
+              <div className="space-y-5">
+                <div className="p-5 bg-ocean-ice rounded-xl">
+                  <label className="block text-sm font-semibold text-textPrimary mb-2">Check-in Date & Time</label>
+                  <p className="text-lg font-medium text-ocean-mid">{formatDateTime(bookingData.checkIn)}</p>
+                </div>
+                
+                <div>
+                  <label className="block text-sm font-semibold text-textPrimary mb-2">Number of Nights</label>
+                  <input
+                    type="number"
+                    min="1"
+                    max="30"
+                    value={bookingData.nights}
+                    onChange={(e) => handleInputChange('nights', parseInt(e.target.value))}
+                    className="w-full px-4 py-2 border border-ocean-light/20 rounded-lg focus:outline-none focus:border-ocean-light"
+                  />
+                </div>
+                
+                <div>
+                  <label className="block text-sm font-semibold text-textPrimary mb-2">Number of Guests *</label>
+                  <input
+                    type="number"
+                    min="1"
+                    max={currentMaxCapacity > 0 ? currentMaxCapacity : undefined}
+                    value={bookingData.guests}
+                    onChange={(e) => handleInputChange('guests', parseInt(e.target.value))}
+                    className={`w-full px-4 py-2 border ${errors.guests ? 'border-red-500' : 'border-ocean-light/20'} rounded-lg focus:outline-none focus:border-ocean-light`}
+                  />
+                  {errors.guests && <p className="text-red-500 text-sm mt-1">{errors.guests}</p>}
+                  <p className="text-xs text-textSecondary mt-1">
+                    Maximum capacity: {currentMaxCapacity > 0 ? currentMaxCapacity : 'Loading...'} {currentMaxCapacity === 1 ? 'guest' : currentMaxCapacity > 0 ? 'guests' : ''}
+                  </p>
+                </div>
+                
+                {bookingData.checkOut && (
+                  <div className="p-5 bg-ocean-ice rounded-xl">
+                    <label className="block text-sm font-semibold text-textPrimary mb-2">Check-out Date & Time</label>
+                    <p className="text-lg font-medium text-ocean-mid">
+                      {formatDateOnly(bookingData.checkOut)} at {checkOutTime}
+                    </p>
+                    <p className="text-xs text-textSecondary mt-1">
+                      Check-out time is 2 hours earlier than check-in time
+                    </p>
+                  </div>
+                )}
+                
+                <div className="p-5 bg-gradient-to-r from-ocean-ice to-blue-white rounded-xl">
+                  <label className="block text-sm font-semibold text-textPrimary mb-2">Total Price</label>
+                  <p className="text-3xl font-bold text-ocean-mid">₱{totalPrice.toLocaleString()}</p>
+                  <p className="text-xs text-textSecondary">₱{price.toLocaleString()} x {bookingData.nights} night(s)</p>
+                  
+                  {/* Down Payment Display */}
+                  <div className="mt-3 pt-3 border-t border-ocean-light/20">
+                    <p className="text-sm font-semibold text-amber-600 mb-1">Down Payment Required (50%)</p>
+                    <p className="text-2xl font-bold text-amber-600">₱{downPaymentAmount.toLocaleString()}</p>
+                    <p className="text-xs text-textSecondary mt-1">Pay 50% upfront to confirm your reservation</p>
+                  </div>
+                </div>
+              </div>
+              
+              <div className="flex gap-3 mt-6">
+                <button
+                  onClick={handlePreviousStep}
+                  className="flex-1 py-3 border border-ocean-light/20 rounded-xl text-textSecondary font-medium hover:bg-ocean-ice transition-all duration-300"
+                >
+                  <i className="fas fa-arrow-left mr-2"></i>
+                  Back
+                </button>
+                <button
+                  onClick={handleNextStep}
+                  disabled={!availabilityStatus.isAvailable || availabilityStatus.checking || !!errors.guests || !currentMaxCapacity}
+                  className={`flex-1 py-3 rounded-xl font-medium transition-all duration-300 ${
+                    availabilityStatus.isAvailable && !availabilityStatus.checking && !errors.guests && currentMaxCapacity
+                      ? 'bg-gradient-to-r from-ocean-mid to-ocean-light text-white hover:shadow-lg'
+                      : 'bg-gray-200 text-gray-500 cursor-not-allowed'
+                  }`}
+                >
+                  Continue to Guest Details
+                </button>
+              </div>
+            </div>
+          )}
 
           {/* Step 2: Guest Details */}
           {step === 2 && (
@@ -558,48 +792,250 @@ export default function BookingPage() {
             <div className="bg-white rounded-2xl shadow-lg p-8">
               <h2 className="text-2xl font-bold text-textPrimary mb-6">Step 3: Payment</h2>
               
-              <div className="space-y-6">
-                <div className="p-5 bg-ocean-ice rounded-xl text-center">
-                  <h3 className="text-lg font-semibold text-textPrimary mb-3">GCash Payment</h3>
-                  <div className="flex justify-center mb-3">
-                    <div className="w-48 h-48 bg-white rounded-xl flex items-center justify-center border border-ocean-light/20">
-                      <i className="fas fa-qrcode text-6xl text-ocean-light"></i>
-                    </div>
-                  </div>
-                  <p className="text-sm text-textSecondary">Scan QR code to pay with GCash</p>
-                </div>
-                
-                <div className="p-5 bg-ocean-ice rounded-xl">
-                  <h3 className="text-lg font-semibold text-textPrimary mb-3">Bank Transfer</h3>
-                  <div className="space-y-2 text-sm">
-                    <p><strong>Bank:</strong> Sample Bank</p>
-                    <p><strong>Account Name:</strong> SEA RIVER VIEW RESORT</p>
-                    <p><strong>Account Number:</strong> 1234-5678-9012</p>
-                  </div>
-                </div>
-                
-                <div className="p-5 bg-gradient-to-r from-ocean-ice to-blue-white rounded-xl">
-                  <p className="text-sm font-semibold text-textPrimary mb-1">Amount to Pay</p>
-                  <p className="text-2xl font-bold text-ocean-mid">₱{totalPrice.toLocaleString()}</p>
-                </div>
-                
-                <div>
-                  <label className="block text-sm font-semibold text-textPrimary mb-2">Upload Proof of Payment *</label>
-                  <input
-                    type="file"
-                    accept="image/*"
-                    onChange={handlePaymentProofUpload}
-                    className="w-full"
-                    disabled={uploading}
-                  />
-                  {uploading && <p className="text-sm text-ocean-mid mt-1">Uploading...</p>}
-                  {bookingData.paymentProof && (
-                    <div className="mt-2">
-                      <p className="text-sm text-green-600">✓ Payment proof uploaded</p>
-                    </div>
-                  )}
+              {/* Payment Method Selection */}
+              <div className="mb-6">
+                <label className="block text-sm font-semibold text-textPrimary mb-3">Select Payment Method</label>
+                <div className="grid grid-cols-2 gap-4">
+                  <button
+                    type="button"
+                    onClick={() => setPaymentMethod('gcash')}
+                    className={`p-4 rounded-xl border-2 transition-all duration-200 flex flex-col items-center gap-2 ${
+                      paymentMethod === 'gcash'
+                        ? 'border-ocean-mid bg-ocean-ice'
+                        : 'border-ocean-light/20 bg-white hover:border-ocean-light'
+                    }`}
+                  >
+                    <i className={`fab fa-gcash text-3xl ${paymentMethod === 'gcash' ? 'text-ocean-mid' : 'text-gray-400'}`}></i>
+                    <span className={`text-sm font-medium ${paymentMethod === 'gcash' ? 'text-ocean-mid' : 'text-textSecondary'}`}>GCash</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setPaymentMethod('bank_transfer')}
+                    className={`p-4 rounded-xl border-2 transition-all duration-200 flex flex-col items-center gap-2 ${
+                      paymentMethod === 'bank_transfer'
+                        ? 'border-ocean-mid bg-ocean-ice'
+                        : 'border-ocean-light/20 bg-white hover:border-ocean-light'
+                    }`}
+                  >
+                    <i className={`fas fa-university text-3xl ${paymentMethod === 'bank_transfer' ? 'text-ocean-mid' : 'text-gray-400'}`}></i>
+                    <span className={`text-sm font-medium ${paymentMethod === 'bank_transfer' ? 'text-ocean-mid' : 'text-textSecondary'}`}>Bank Transfer</span>
+                  </button>
                 </div>
               </div>
+              
+              {/* GCash Payment Section */}
+              {paymentMethod === 'gcash' && (
+                <div className="space-y-6">
+                  <div className="p-5 bg-ocean-ice rounded-xl text-center">
+                    <h3 className="text-lg font-semibold text-textPrimary mb-3 flex items-center justify-center gap-2">
+                      <i className="fab fa-gcash text-ocean-mid"></i>
+                      GCash Payment
+                    </h3>
+                    {paymentSettings.gcashQRCode ? (
+                      <>
+                        <div className="flex justify-center mb-3">
+                          <div className="w-48 h-48 bg-white rounded-xl flex items-center justify-center border border-ocean-light/20 overflow-hidden relative">
+                            <img
+                              src={paymentSettings.gcashQRCode}
+                              alt="GCash QR Code"
+                              className="object-contain w-full h-full"
+                            />
+                          </div>
+                        </div>
+                        <p className="text-sm text-textSecondary">Scan QR code to pay with GCash</p>
+                      </>
+                    ) : (
+                      <p className="text-sm text-amber-600">GCash QR code not available. Please contact the resort.</p>
+                    )}
+                  </div>
+                  
+                  <div className="p-5 bg-gradient-to-r from-ocean-ice to-blue-white rounded-xl">
+                    <p className="text-sm font-semibold text-textPrimary mb-1">Down Payment Required</p>
+                    <p className="text-2xl font-bold text-amber-600">₱{downPaymentAmount.toLocaleString()}</p>
+                    <p className="text-xs text-textSecondary mt-1">50% of total price</p>
+                  </div>
+
+                  <div className="p-4 bg-blue-50 rounded-xl border border-blue-200">
+                    <p className="text-sm text-blue-800 mb-2">
+                      <i className="fas fa-info-circle mr-2"></i>
+                      <strong>Payment Notes:</strong>
+                    </p>
+                    <ul className="text-xs text-blue-700 space-y-1 ml-4 list-disc">
+                      <li>You are only required to pay the <strong>down payment (50%)</strong> to confirm your reservation.</li>
+                      <li>The <strong>remaining balance</strong> (₱{(totalPrice - downPaymentAmount).toLocaleString()}) should be paid at the resort upon check-in.</li>
+                      <li>If you cancel your reservation, the resort will retain <strong>50% of the down payment</strong>.</li>
+                    </ul>
+                  </div>
+                  
+                  <div>
+                    <label className="block text-sm font-semibold text-textPrimary mb-2">Upload Proof of Payment (Down Payment) *</label>
+                    <input
+                      type="file"
+                      accept="image/*"
+                      onChange={handlePaymentProofUpload}
+                      className="w-full"
+                      disabled={uploading}
+                    />
+                    {uploading && <p className="text-sm text-ocean-mid mt-1">Uploading...</p>}
+                    {bookingData.paymentProof && (
+                      <div className="mt-2">
+                        <p className="text-sm text-green-600">✓ Payment proof uploaded</p>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
+              
+{/* Bank Transfer Section */}
+{paymentMethod === 'bank_transfer' && (
+  <div className="space-y-6">
+    <div className="p-5 bg-ocean-ice rounded-xl">
+      <h3 className="text-lg font-semibold text-textPrimary mb-3 flex items-center gap-2">
+        <i className="fas fa-university text-ocean-mid"></i>
+        Bank Transfer
+      </h3>
+
+      {/* Modal Notification */}
+{modalNotification && (
+  <div className={`mb-4 p-3 rounded-lg text-sm ${
+    modalNotification.type === 'error' 
+      ? 'bg-red-50 text-red-700 border border-red-200' 
+      : 'bg-green-50 text-green-700 border border-green-200'
+  }`}>
+    <i className={`fas ${modalNotification.type === 'error' ? 'fa-exclamation-circle' : 'fa-check-circle'} mr-2`}></i>
+    {modalNotification.message}
+  </div>
+)}
+      
+      {bankDetailsProvided ? (
+        <div className="space-y-3">
+          <div className="bg-white rounded-lg p-4 space-y-2">
+            <p><strong>Bank:</strong> {bankDetailsProvided.bankName}</p>
+            <p><strong>Account Name:</strong> {bankDetailsProvided.accountName}</p>
+            <p><strong>Account Number:</strong> {bankDetailsProvided.accountNumber}</p>
+          </div>
+        </div>
+      ) : bankRequestSent ? (
+        <div className="text-center py-4">
+          <div className="w-16 h-16 bg-blue-100 rounded-full flex items-center justify-center mx-auto mb-3">
+            <i className="fas fa-clock text-blue-600 text-2xl"></i>
+          </div>
+          <p className="text-textSecondary font-medium mb-2">
+            Request Sent!
+          </p>
+          <p className="text-sm text-textSecondary">
+            Your bank transfer request has been sent to the resort.
+          </p>
+          <p className="text-xs text-textSecondary mt-2">
+            The resort will provide bank account details shortly. Please check back.
+          </p>
+          {requestedBankInfo && (
+            <div className="mt-3 p-3 bg-blue-50 rounded-lg">
+              <p className="text-xs text-blue-700">
+                <i className="fas fa-university mr-1"></i>
+                Requested Bank: <strong>{requestedBankInfo.bankName}</strong>
+              </p>
+            </div>
+          )}
+        </div>
+      ) : (
+        <div className="text-center py-4">
+          {!showBankSelection ? (
+            <>
+              <div className="w-16 h-16 bg-amber-100 rounded-full flex items-center justify-center mx-auto mb-3">
+                <i className="fas fa-university text-amber-600 text-2xl"></i>
+              </div>
+              <p className="text-textSecondary mb-3">
+                Select your preferred bank to receive account details:
+              </p>
+              {paymentSettings.bankAccounts.length > 0 ? (
+                <div className="space-y-2 mb-4">
+                  {paymentSettings.bankAccounts.map((bank) => (
+                    <button
+                      key={bank.id}
+                      onClick={() => {
+                        setSelectedBankAccount(bank);
+                        setShowBankSelection(true);
+                      }}
+                      className="w-full text-left p-3 border border-ocean-light/20 rounded-lg hover:bg-ocean-ice transition-all duration-200"
+                    >
+                      <p className="font-semibold text-textPrimary">{bank.bankName}</p>
+                      <p className="text-xs text-textSecondary">{bank.accountName}</p>
+                    </button>
+                  ))}
+                </div>
+              ) : (
+                <p className="text-sm text-amber-600">No bank accounts available. Please contact the resort.</p>
+              )}
+            </>
+          ) : (
+            <div className="space-y-4">
+              <div className="bg-amber-50 rounded-lg p-4">
+                <p className="font-semibold text-amber-800 mb-2">Selected Bank:</p>
+                <p><strong>Bank:</strong> {selectedBankAccount?.bankName}</p>
+                <p><strong>Account Name:</strong> {selectedBankAccount?.accountName}</p>
+              </div>
+              <button
+                onClick={handleNotifyResort}
+                disabled={notifyingResort}
+                className="w-full px-6 py-2 bg-amber-500 text-white rounded-lg font-medium hover:bg-amber-600 transition-all duration-200"
+              >
+                {notifyingResort ? (
+                  <><i className="fas fa-spinner fa-spin mr-2"></i>Sending Request...</>
+                ) : (
+                  <><i className="fas fa-paper-plane mr-2"></i>Confirm & Send Request</>
+                )}
+              </button>
+              <button
+                onClick={() => setShowBankSelection(false)}
+                className="w-full px-6 py-2 border border-ocean-light/20 rounded-lg text-textSecondary hover:bg-ocean-ice transition-all duration-200"
+              >
+                Back to Bank Selection
+              </button>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+    
+    <div className="p-5 bg-gradient-to-r from-ocean-ice to-blue-white rounded-xl">
+      <p className="text-sm font-semibold text-textPrimary mb-1">Down Payment Required</p>
+      <p className="text-2xl font-bold text-amber-600">₱{downPaymentAmount.toLocaleString()}</p>
+      <p className="text-xs text-textSecondary mt-1">50% of total price</p>
+    </div>
+
+    <div className="p-4 bg-blue-50 rounded-xl border border-blue-200">
+      <p className="text-sm text-blue-800 mb-2">
+        <i className="fas fa-info-circle mr-2"></i>
+        <strong>Payment Notes:</strong>
+      </p>
+      <ul className="text-xs text-blue-700 space-y-1 ml-4 list-disc">
+        <li>You are only required to pay the <strong>down payment (50%)</strong> to confirm your reservation.</li>
+        <li>The <strong>remaining balance</strong> (₱{(totalPrice - downPaymentAmount).toLocaleString()}) should be paid at the resort upon check-in.</li>
+        <li>If you cancel your reservation, the resort will retain <strong>50% of the down payment</strong>.</li>
+      </ul>
+    </div>
+    
+    {bankDetailsProvided && (
+      <div>
+        <label className="block text-sm font-semibold text-textPrimary mb-2">Upload Proof of Payment (Down Payment) *</label>
+        <input
+          type="file"
+          accept="image/*"
+          onChange={handlePaymentProofUpload}
+          className="w-full"
+          disabled={uploading}
+        />
+        {uploading && <p className="text-sm text-ocean-mid mt-1">Uploading...</p>}
+        {bookingData.paymentProof && (
+          <div className="mt-2">
+            <p className="text-sm text-green-600">✓ Payment proof uploaded</p>
+          </div>
+        )}
+      </div>
+    )}
+  </div>
+)}
               
               <div className="flex gap-3 mt-6">
                 <button
@@ -611,9 +1047,9 @@ export default function BookingPage() {
                 </button>
                 <button
                   onClick={handleSubmitBooking}
-                  disabled={!bookingData.paymentProof || submitting}
+                  disabled={!bookingData.paymentProof || submitting || (paymentMethod === 'bank_transfer' && !bankDetailsProvided)}
                   className={`flex-1 py-3 rounded-xl font-medium transition-all duration-300 ${
-                    bookingData.paymentProof && !submitting
+                    bookingData.paymentProof && !submitting && (paymentMethod !== 'bank_transfer' || bankDetailsProvided)
                       ? 'bg-gradient-to-r from-ocean-mid to-ocean-light text-white hover:shadow-lg'
                       : 'bg-gray-200 text-gray-500 cursor-not-allowed'
                   }`}
@@ -634,8 +1070,15 @@ export default function BookingPage() {
               <p className="text-textSecondary mb-4">
                 Thank you for your booking. We'll send a confirmation email to {bookingData.email}
               </p>
-              <div className="p-4 bg-ocean-ice rounded-lg mb-6">
+              <div className="p-4 bg-ocean-ice rounded-lg mb-4">
                 <p className="text-sm text-textPrimary">Booking Reference: <strong>{bookingData.bookingId}</strong></p>
+              </div>
+              <div className="p-4 bg-amber-50 rounded-lg mb-6">
+                <p className="text-sm text-amber-800">
+                  <i className="fas fa-info-circle mr-2"></i>
+                  Down payment of <strong>₱{downPaymentAmount.toLocaleString()}</strong> has been confirmed.
+                  Remaining balance of <strong>₱{(totalPrice - downPaymentAmount).toLocaleString()}</strong> is payable at the resort.
+                </p>
               </div>
               <button
                 onClick={() => router.push('/dashboard')}

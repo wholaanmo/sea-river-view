@@ -3,7 +3,7 @@
 
 import { useState, useEffect } from 'react';
 import { db } from '../../../../lib/firebase';
-import { collection, query, orderBy, onSnapshot, where, updateDoc, doc, deleteDoc } from 'firebase/firestore';
+import { collection, query, orderBy, onSnapshot, where, updateDoc, doc, deleteDoc, setDoc, getDoc } from 'firebase/firestore';
 import { logAdminAction } from '../../../../lib/auditLogger';
 import Image from 'next/image';
 import { useRouter } from 'next/navigation';
@@ -12,6 +12,7 @@ export default function ArchivePage() {
   const [archivedRooms, setArchivedRooms] = useState([]);
   const [archivedDayTours, setArchivedDayTours] = useState([]);
   const [archivedActivities, setArchivedActivities] = useState([]);
+  const [archivedBankAccounts, setArchivedBankAccounts] = useState([]);
   const [activeTab, setActiveTab] = useState('rooms');
   const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
@@ -88,6 +89,28 @@ export default function ArchivePage() {
     return () => unsubscribe();
   }, []);
   
+  // Real-time listener for archived bank accounts
+  useEffect(() => {
+    const archivedBankRef = collection(db, 'archived_bank_accounts');
+    const q = query(archivedBankRef, orderBy('archivedAt', 'desc'));
+    
+    const unsubscribe = onSnapshot(q, (querySnapshot) => {
+      const accountsList = [];
+      querySnapshot.forEach((doc) => {
+        accountsList.push({
+          id: doc.id,
+          ...doc.data()
+        });
+      });
+      setArchivedBankAccounts(accountsList);
+    }, (error) => {
+      console.error('Error fetching archived bank accounts:', error);
+      showNotification('Failed to load archived bank accounts.', 'error');
+    });
+    
+    return () => unsubscribe();
+  }, []);
+  
   // Auto-hide notification
   useEffect(() => {
     if (notification.show) {
@@ -106,26 +129,69 @@ export default function ArchivePage() {
     if (!restoreModal.item) return;
     
     try {
-      const collectionName = restoreModal.type === 'room' ? 'rooms' : 
-                             restoreModal.type === 'daytour' ? 'dayTours' : 'activities';
-      const itemRef = doc(db, collectionName, restoreModal.item.id);
-      
-      const itemName = restoreModal.item.name || restoreModal.item.type || restoreModal.item.name;
-      const itemType = restoreModal.type;
-      
-      await updateDoc(itemRef, {
-        archived: false,
-        restoredAt: new Date().toISOString()
-      });
-      
-      // Log the restore action
-      await logAdminAction({
-        action: 'Restored Item',
-        module: 'Archive',
-        details: `Restored ${itemType}: ${itemName}`
-      });
-      
-      showNotification(`${itemName} has been restored successfully!`);
+      if (restoreModal.type === 'bankaccount') {
+        // Restore bank account: move from archived_bank_accounts to active bank accounts in settings
+        const settingsRef = doc(db, 'settings', 'payment');
+        const settingsDoc = await getDoc(settingsRef);
+        const currentBankAccounts = settingsDoc.exists() ? (settingsDoc.data().bankAccounts || []) : [];
+        
+        // Remove archived flag and add back to active accounts
+        const restoredAccount = {
+          ...restoreModal.item,
+          restoredAt: new Date().toISOString(),
+          // Remove archived-specific fields if any
+        };
+        delete restoredAccount.archivedAt;
+        delete restoredAccount.archivedBy;
+        delete restoredAccount.id; // let Firestore generate new id or keep same? We'll keep same id but ensure no duplicate
+        // Use the same id if it exists, otherwise generate new
+        const newAccount = {
+          id: restoreModal.item.id, // reuse the id
+          bankName: restoreModal.item.bankName,
+          accountName: restoreModal.item.accountName,
+          accountNumber: restoreModal.item.accountNumber,
+          createdAt: restoreModal.item.createdAt || new Date().toISOString(),
+          restoredAt: new Date().toISOString()
+        };
+        
+        const updatedBankAccounts = [...currentBankAccounts, newAccount];
+        await setDoc(settingsRef, {
+          bankAccounts: updatedBankAccounts,
+          updatedAt: new Date().toISOString()
+        }, { merge: true });
+        
+        // Delete from archived collection
+        const archivedRef = doc(db, 'archived_bank_accounts', restoreModal.item.id);
+        await deleteDoc(archivedRef);
+        
+        await logAdminAction({
+          action: 'Restored Bank Account',
+          module: 'Archive',
+          details: `Restored bank account: ${restoreModal.item.bankName} - ${restoreModal.item.accountName}`
+        });
+        
+        showNotification(`${restoreModal.item.bankName} has been restored successfully!`);
+      } else {
+        // Restore rooms, day tours, activities
+        const collectionName = restoreModal.type === 'room' ? 'rooms' : 
+                               restoreModal.type === 'daytour' ? 'dayTours' : 'activities';
+        const itemRef = doc(db, collectionName, restoreModal.item.id);
+        const itemName = restoreModal.item.name || restoreModal.item.type || restoreModal.item.name;
+        const itemType = restoreModal.type;
+        
+        await updateDoc(itemRef, {
+          archived: false,
+          restoredAt: new Date().toISOString()
+        });
+        
+        await logAdminAction({
+          action: 'Restored Item',
+          module: 'Archive',
+          details: `Restored ${itemType}: ${itemName}`
+        });
+        
+        showNotification(`${itemName} has been restored successfully!`);
+      }
       setRestoreModal({ show: false, item: null, type: '' });
     } catch (error) {
       console.error('Error restoring item:', error);
@@ -137,17 +203,23 @@ export default function ArchivePage() {
     if (!deleteModal.item) return;
     
     try {
-      const collectionName = deleteModal.type === 'room' ? 'rooms' : 
-                             deleteModal.type === 'daytour' ? 'dayTours' : 'activities';
+      let collectionName;
+      let itemName;
+      
+      if (deleteModal.type === 'bankaccount') {
+        collectionName = 'archived_bank_accounts';
+        itemName = `${deleteModal.item.bankName} - ${deleteModal.item.accountName}`;
+      } else {
+        collectionName = deleteModal.type === 'room' ? 'rooms' : 
+                         deleteModal.type === 'daytour' ? 'dayTours' : 'activities';
+        itemName = deleteModal.item.name || deleteModal.item.type || deleteModal.item.name;
+      }
+      
       const itemRef = doc(db, collectionName, deleteModal.item.id);
-      
-      const itemName = deleteModal.item.name || deleteModal.item.type || deleteModal.item.name;
-      const itemType = deleteModal.type;
-      
-      // Permanently delete from database
       await deleteDoc(itemRef);
       
-      // Log the delete action
+      const itemType = deleteModal.type === 'bankaccount' ? 'bank account' : deleteModal.type;
+      
       await logAdminAction({
         action: 'Deleted Item',
         module: 'Archive',
@@ -213,6 +285,12 @@ export default function ArchivePage() {
     return matchesSearch;
   });
   
+  const filteredBankAccounts = archivedBankAccounts.filter(account => {
+    const matchesSearch = account.bankName?.toLowerCase().includes(searchTerm.toLowerCase()) ||
+                         account.accountName?.toLowerCase().includes(searchTerm.toLowerCase());
+    return matchesSearch;
+  });
+  
   const getPricingLabel = (pricingType) => {
     if (pricingType === 'per_person') return 'Per Person';
     if (pricingType === 'promo') return 'Promo';
@@ -244,10 +322,10 @@ export default function ArchivePage() {
       )}
       
       {/* Tabs */}
-      <div className="flex gap-2 mb-6 border-b border-ocean-light/20">
+      <div className="flex gap-2 mb-6 border-b border-ocean-light/20 overflow-x-auto">
         <button
           onClick={() => setActiveTab('rooms')}
-          className={`px-6 py-3 font-medium transition-all duration-200 ${
+          className={`px-6 py-3 font-medium transition-all duration-200 whitespace-nowrap ${
             activeTab === 'rooms'
               ? 'text-ocean-mid border-b-2 border-ocean-mid'
               : 'text-textSecondary hover:text-ocean-mid'
@@ -258,7 +336,7 @@ export default function ArchivePage() {
         </button>
         <button
           onClick={() => setActiveTab('daytours')}
-          className={`px-6 py-3 font-medium transition-all duration-200 ${
+          className={`px-6 py-3 font-medium transition-all duration-200 whitespace-nowrap ${
             activeTab === 'daytours'
               ? 'text-ocean-mid border-b-2 border-ocean-mid'
               : 'text-textSecondary hover:text-ocean-mid'
@@ -269,7 +347,7 @@ export default function ArchivePage() {
         </button>
         <button
           onClick={() => setActiveTab('activities')}
-          className={`px-6 py-3 font-medium transition-all duration-200 ${
+          className={`px-6 py-3 font-medium transition-all duration-200 whitespace-nowrap ${
             activeTab === 'activities'
               ? 'text-ocean-mid border-b-2 border-ocean-mid'
               : 'text-textSecondary hover:text-ocean-mid'
@@ -277,6 +355,17 @@ export default function ArchivePage() {
         >
           <i className="fas fa-bicycle mr-2"></i>
           Archived Activities
+        </button>
+        <button
+          onClick={() => setActiveTab('bankaccounts')}
+          className={`px-6 py-3 font-medium transition-all duration-200 whitespace-nowrap ${
+            activeTab === 'bankaccounts'
+              ? 'text-ocean-mid border-b-2 border-ocean-mid'
+              : 'text-textSecondary hover:text-ocean-mid'
+          }`}
+        >
+          <i className="fas fa-university mr-2"></i>
+          Archived Bank Accounts
         </button>
       </div>
       
@@ -286,7 +375,7 @@ export default function ArchivePage() {
           <i className="fas fa-search absolute left-3 top-1/2 -translate-y-1/2 text-neutral text-sm"></i>
           <input
             type="text"
-            placeholder={`Search archived ${activeTab === 'rooms' ? 'rooms by name or type...' : activeTab === 'daytours' ? 'day tours by name or type...' : 'activities by name...'}`}
+            placeholder={`Search archived ${activeTab === 'rooms' ? 'rooms by name or type...' : activeTab === 'daytours' ? 'day tours by name or type...' : activeTab === 'activities' ? 'activities by name...' : 'bank accounts by name...'}`}
             value={searchTerm}
             onChange={(e) => setSearchTerm(e.target.value)}
             className="w-full pl-9 pr-3 py-2.5 border border-ocean-light/20 rounded-xl text-sm focus:outline-none focus:border-ocean-light focus:ring-2 focus:ring-ocean-light/20 transition-all duration-300 bg-white"
@@ -308,7 +397,7 @@ export default function ArchivePage() {
                   <th className="px-4 py-3 text-left text-sm font-semibold text-textPrimary">Status</th>
                   <th className="px-4 py-3 text-left text-sm font-semibold text-textPrimary">Archived Date</th>
                   <th className="px-4 py-3 text-left text-sm font-semibold text-textPrimary">Actions</th>
-                  </tr>
+                </tr>
               </thead>
               <tbody>
                 {filteredRooms.length === 0 ? (
@@ -543,6 +632,69 @@ export default function ArchivePage() {
         </div>
       )}
       
+      {/* Bank Accounts Tab */}
+      {activeTab === 'bankaccounts' && (
+        <div className="bg-white rounded-2xl shadow-md border border-ocean-light/10 overflow-hidden">
+          <div className="overflow-x-auto">
+            <table className="w-full">
+              <thead>
+                <tr className="bg-ocean-pale/50 border-b border-ocean-light/20">
+                  <th className="px-4 py-3 text-left text-sm font-semibold text-textPrimary">Bank Name</th>
+                  <th className="px-4 py-3 text-left text-sm font-semibold text-textPrimary">Account Name</th>
+                  <th className="px-4 py-3 text-left text-sm font-semibold text-textPrimary">Account Number</th>
+                  <th className="px-4 py-3 text-left text-sm font-semibold text-textPrimary">Archived Date</th>
+                  <th className="px-4 py-3 text-left text-sm font-semibold text-textPrimary">Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {filteredBankAccounts.length === 0 ? (
+                  <tr>
+                    <td colSpan="5" className="px-4 py-12 text-center text-neutral">
+                      <i className="fas fa-archive text-5xl mb-3 opacity-50 block"></i>
+                      <p className="text-lg">No archived bank accounts found</p>
+                      <p className="text-sm">Archived bank accounts will appear here</p>
+                    </td>
+                  </tr>
+                ) : (
+                  filteredBankAccounts.map((account) => (
+                    <tr key={account.id} className="border-b border-ocean-light/10 hover:bg-ocean-ice/30 transition-colors">
+                      <td className="px-4 py-3">
+                        <div className="font-medium text-textPrimary">{account.bankName}</div>
+                      </td>
+                      <td className="px-4 py-3 text-textSecondary">{account.accountName}</td>
+                      <td className="px-4 py-3 text-textSecondary">{account.accountNumber}</td>
+                      <td className="px-4 py-3 text-textSecondary text-sm">
+                        {account.archivedAt ? new Date(account.archivedAt).toLocaleDateString() : '—'}
+                      </td>
+                      <td className="px-4 py-3">
+                        <div className="flex gap-2">
+                          <button
+                            onClick={() => setRestoreModal({ show: true, item: account, type: 'bankaccount' })}
+                            className="px-3 py-2 rounded-lg bg-green-500/10 text-green-600 hover:bg-green-600 hover:text-white transition-all duration-200 flex items-center gap-1"
+                            title="Restore"
+                          >
+                            <i className="fas fa-trash-restore"></i>
+                            <span className="text-sm">Restore</span>
+                          </button>
+                          <button
+                            onClick={() => setDeleteModal({ show: true, item: account, type: 'bankaccount' })}
+                            className="px-3 py-2 rounded-lg bg-red-500/10 text-red-600 hover:bg-red-600 hover:text-white transition-all duration-200 flex items-center gap-1"
+                            title="Permanently Delete"
+                          >
+                            <i className="fas fa-trash-alt"></i>
+                            <span className="text-sm">Delete</span>
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  ))
+                )}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+      
       {/* Restore Confirmation Modal */}
       {restoreModal.show && restoreModal.item && (
         <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-[60] p-4">
@@ -553,7 +705,9 @@ export default function ArchivePage() {
               </div>
               <h3 className="text-lg font-bold text-textPrimary mb-2">Restore Item</h3>
               <p className="text-textSecondary text-sm">
-                Are you sure you want to restore "{restoreModal.item.name || restoreModal.item.type || restoreModal.item.name}"? 
+                Are you sure you want to restore "{restoreModal.type === 'bankaccount' 
+                  ? `${restoreModal.item.bankName} - ${restoreModal.item.accountName}`
+                  : (restoreModal.item.name || restoreModal.item.type || restoreModal.item.name)}"? 
                 This item will be moved back to active listings.
               </p>
             </div>
@@ -585,7 +739,9 @@ export default function ArchivePage() {
               </div>
               <h3 className="text-lg font-bold text-textPrimary mb-2">Permanently Delete Item</h3>
               <p className="text-textSecondary text-sm">
-                Are you sure you want to permanently delete "{deleteModal.item.name || deleteModal.item.type || deleteModal.item.name}"? 
+                Are you sure you want to permanently delete "{deleteModal.type === 'bankaccount' 
+                  ? `${deleteModal.item.bankName} - ${deleteModal.item.accountName}`
+                  : (deleteModal.item.name || deleteModal.item.type || deleteModal.item.name)}"? 
                 This action cannot be undone.
               </p>
             </div>

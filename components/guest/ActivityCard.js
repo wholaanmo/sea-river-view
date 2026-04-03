@@ -1,3 +1,4 @@
+// components/guest/ActivityCard.js
 'use client';
 
 import Image from 'next/image';
@@ -8,6 +9,25 @@ export default function ActivityCard({ activity }) {
   const [showDetailsModal, setShowDetailsModal] = useState(false);
   const [currentImageIndex, setCurrentImageIndex] = useState(0);
   const [isZoomed, setIsZoomed] = useState(false);
+
+  // Helper function to get price display text
+  const getPriceDisplay = () => {
+    const price = activity.priceValue?.toLocaleString();
+    switch (activity.priceType) {
+      case 'perHour':
+        return { label: `/hour`, full: `per hour` };
+      case 'per30Mins':
+        return { label: `/30 min`, full: `per 30 minutes` };
+      case 'per2Hrs':
+        return { label: `/2 hrs`, full: `per 2 hours` };
+      case 'per1Hr30Mins':
+        return { label: `/1.5 hrs`, full: `per 1.5 hours` };
+      default:
+        return { label: ``, full: `` };
+    }
+  };
+
+  const priceDisplay = getPriceDisplay();
 
   const nextImage = () => {
     if (activity.images && activity.images.length > 0) {
@@ -23,46 +43,48 @@ export default function ActivityCard({ activity }) {
 
   return (
     <>
-      <div className="flex gap-3 p-3 bg-ocean-ice/30 rounded-lg hover:bg-ocean-ice transition-all duration-200 group">
-        {/* Activity Image */}
-        <div className="relative w-16 h-16 rounded-lg overflow-hidden flex-shrink-0 bg-ocean-pale cursor-pointer" onClick={() => setShowDetailsModal(true)}>
+      <div className="bg-white rounded-2xl shadow-md overflow-hidden hover:shadow-xl transition-all duration-300 group flex flex-col sm:flex-row">
+        {/* Activity Image - Left side (30-35% width) */}
+        <div 
+          className="relative sm:w-[35%] md:w-[30%] h-48 sm:h-auto min-h-[180px] bg-gradient-to-br from-ocean-pale to-ocean-ice overflow-hidden cursor-pointer"
+          onClick={() => setShowDetailsModal(true)}
+        >
           {activity.images && activity.images[0] && !imageError ? (
             <Image
               src={activity.images[0]}
               alt={activity.name}
               fill
-              className="object-cover group-hover:scale-105 transition-transform duration-300"
+              className="object-cover group-hover:scale-105 transition-transform duration-500"
               onError={() => setImageError(true)}
             />
           ) : (
             <div className="flex items-center justify-center h-full">
-              <i className="fas fa-bicycle text-2xl text-ocean-light/50"></i>
+              <i className="fas fa-bicycle text-5xl text-ocean-light/30"></i>
             </div>
           )}
         </div>
         
-        {/* Activity Details */}
-        <div className="flex-1 min-w-0">
-          <h4 className="font-semibold text-textPrimary text-sm mb-1">
-            {activity.name}
-          </h4>
-          <p className="text-xs text-textSecondary line-clamp-2 mb-2">
+        {/* Activity Details - Right side (65-70% width) */}
+        <div className="flex-1 p-5 flex flex-col">
+          <h3 className="text-xl font-bold text-textPrimary mb-2 line-clamp-1">{activity.name}</h3>
+          
+          <div className="mb-3">
+            <p className="text-2xl font-bold text-ocean-mid">
+              ₱{activity.priceValue?.toLocaleString()}
+              <span className="text-sm font-normal text-textSecondary ml-1">{priceDisplay.label}</span>
+            </p>
+          </div>
+          
+          <p className="text-sm text-textSecondary line-clamp-2 mb-4 flex-1">
             {activity.description}
           </p>
-          <div className="flex items-center justify-between">
-            <div>
-              <p className="text-sm font-bold text-ocean-mid">
-                ₱{activity.pricePerHour.toLocaleString()}
-                <span className="text-xs font-normal text-textSecondary">/hour</span>
-              </p>
-            </div>
-            <button
-              onClick={() => setShowDetailsModal(true)}
-              className="text-xs px-2 py-1 bg-ocean-light/10 text-ocean-mid rounded-lg hover:bg-ocean-light hover:text-white transition-all duration-200"
-            >
-              Details
-            </button>
-          </div>
+          
+          <button
+            onClick={() => setShowDetailsModal(true)}
+            className="w-full sm:w-auto px-5 py-2.5 border border-ocean-light/30 text-ocean-mid rounded-xl font-medium hover:bg-ocean-mid hover:text-white hover:border-ocean-mid transition-all duration-300 text-center"
+          >
+            View Details
+          </button>
         </div>
       </div>
 
@@ -171,9 +193,11 @@ export default function ActivityCard({ activity }) {
                 <p className="text-lg font-semibold text-textPrimary">{activity.name}</p>
               </div>
               <div>
-                <label className="block text-xs font-semibold text-neutral uppercase tracking-wide mb-1">Price per Hour</label>
-                <p className="text-2xl font-bold text-ocean-mid">₱{activity.pricePerHour.toLocaleString()}</p>
-                <span className="text-xs text-neutral">per hour</span>
+                <label className="block text-xs font-semibold text-neutral uppercase tracking-wide mb-1">Price</label>
+                <p className="text-2xl font-bold text-ocean-mid">
+                  ₱{activity.priceValue?.toLocaleString()}
+                  <span className="text-sm font-normal text-textSecondary"> {priceDisplay.full}</span>
+                </p>
               </div>
               <div className="col-span-2">
                 <label className="block text-xs font-semibold text-neutral uppercase tracking-wide mb-1">Description</label>
@@ -196,6 +220,12 @@ export default function ActivityCard({ activity }) {
       )}
 
       <style jsx>{`
+        .line-clamp-1 {
+          display: -webkit-box;
+          -webkit-line-clamp: 1;
+          -webkit-box-orient: vertical;
+          overflow: hidden;
+        }
         .line-clamp-2 {
           display: -webkit-box;
           -webkit-line-clamp: 2;

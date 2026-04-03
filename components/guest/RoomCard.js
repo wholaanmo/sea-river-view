@@ -10,9 +10,12 @@ export default function RoomCard({ room }) {
   const [showDetailsModal, setShowDetailsModal] = useState(false);
   const router = useRouter();
 
-  const handleBookNow = () => {
-    router.push(`/rooms/calendar?roomId=${room.id}&roomType=${encodeURIComponent(room.type)}&price=${room.price}&capacity=${room.capacity}`);
-  };
+const handleBookNow = () => {
+  // Make sure room.capacity contains the max capacity value
+  // If room.capacity doesn't exist, use room.capacityMax
+  const maxCap = room.capacity || room.capacityMax;
+  router.push(`/rooms/calendar?roomId=${room.id}&roomType=${encodeURIComponent(room.type)}&price=${room.price}&capacity=${maxCap}&totalRooms=${room.totalRooms}`);
+};
 
   return (
     <>

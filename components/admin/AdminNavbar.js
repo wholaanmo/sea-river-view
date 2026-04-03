@@ -1,13 +1,17 @@
+// components/admin/AdminNavbar.js
 'use client';
 
 import { useState, useEffect } from 'react';
 import Image from 'next/image';
 import { auth, db } from '../../lib/firebase';
-import { doc, getDoc } from 'firebase/firestore';
+import { doc, getDoc, collection, query, orderBy, onSnapshot, updateDoc, writeBatch, getDocs } from 'firebase/firestore';
 
 export default function AdminNavbar({ toggleSidebar, sidebarOpen }) {
   const [userName, setUserName] = useState('');
   const [userRole, setUserRole] = useState('');
+  const [unreadCount, setUnreadCount] = useState(0);
+  const [showNotifications, setShowNotifications] = useState(false);
+  const [notifications, setNotifications] = useState([]);
 
   useEffect(() => {
     const fetchUserData = async () => {
@@ -29,6 +33,70 @@ export default function AdminNavbar({ toggleSidebar, sidebarOpen }) {
     fetchUserData();
   }, []);
 
+  // Real-time listener for ALL bank transfer requests (no status filter)
+  // Includes 'read' field to track unread status
+  useEffect(() => {
+    const bankRequestsRef = collection(db, 'bank_requests');
+    const q = query(
+      bankRequestsRef,
+      orderBy('createdAt', 'desc')
+    );
+    
+    const unsubscribe = onSnapshot(q, (querySnapshot) => {
+      const requests = [];
+      let unread = 0;
+      querySnapshot.forEach((doc) => {
+        const data = doc.data();
+        const isRead = data.read === true;
+        if (!isRead) unread++;
+        requests.push({
+          id: doc.id,
+          guestName: data.guestName,
+          totalPrice: data.totalPrice,
+          createdAt: data.createdAt,
+          read: isRead,
+          roomType: data.roomType,
+          bookingId: data.bookingId
+        });
+      });
+      setUnreadCount(unread);
+      setNotifications(requests);
+    }, (error) => {
+      console.error('Error fetching bank transfer requests:', error);
+    });
+    
+    return () => unsubscribe();
+  }, []);
+
+  // Mark all notifications as read when dropdown is opened
+  const markAllAsRead = async () => {
+    if (unreadCount === 0) return;
+    try {
+      const batch = writeBatch(db);
+      const bankRequestsRef = collection(db, 'bank_requests');
+      const q = query(bankRequestsRef, orderBy('createdAt', 'desc'));
+      const snapshot = await getDocs(q);
+      snapshot.forEach((doc) => {
+        const data = doc.data();
+        if (data.read !== true) {
+          const docRef = doc.ref;
+          batch.update(docRef, { read: true });
+        }
+      });
+      await batch.commit();
+    } catch (error) {
+      console.error('Error marking notifications as read:', error);
+    }
+  };
+
+  const handleToggleNotifications = async () => {
+    if (!showNotifications) {
+      // Opening dropdown: mark all as read
+      await markAllAsRead();
+    }
+    setShowNotifications(!showNotifications);
+  };
+
   return (
     <nav 
       className="fixed right-0 h-navbar bg-white z-40 shadow-sm flex items-center transition-all duration-300 ease-in-out"
@@ -48,6 +116,77 @@ export default function AdminNavbar({ toggleSidebar, sidebarOpen }) {
         </div>
 
         <div className="flex items-center gap-4">
+          {/* Notification Bell */}
+          <div className="relative">
+            <button
+              onClick={handleToggleNotifications}
+              className="relative flex items-center justify-center w-10 h-10 rounded-full bg-gradient-to-r from-blue-white to-white text-ocean-light border border-ocean-light/10 hover:bg-gradient-to-r hover:from-ocean-light hover:to-ocean-mid hover:text-white transition-all duration-300 shadow-sm"
+            >
+              <i className="fas fa-bell text-base"></i>
+              {unreadCount > 0 && (
+                <span className="absolute -top-1 -right-1 w-5 h-5 bg-red-500 text-white text-xs rounded-full flex items-center justify-center animate-pulse">
+                  {unreadCount}
+                </span>
+              )}
+            </button>
+            
+            {/* Notifications Dropdown */}
+            {showNotifications && (
+              <div className="absolute right-0 mt-2 w-80 bg-white rounded-xl shadow-lg border border-ocean-light/20 overflow-hidden z-50">
+                <div className="bg-gradient-to-r from-ocean-mid to-ocean-light px-4 py-3">
+                  <h3 className="text-white font-semibold text-sm">
+                    Notifications
+                    {unreadCount > 0 && (
+                      <span className="ml-2 bg-white text-ocean-mid text-xs px-2 py-0.5 rounded-full">
+                        {unreadCount} new
+                      </span>
+                    )}
+                  </h3>
+                </div>
+                <div className="max-h-96 overflow-y-auto">
+                  {notifications.length === 0 ? (
+                    <div className="p-4 text-center text-textSecondary text-sm">
+                      <i className="fas fa-bell-slash text-2xl mb-2 block opacity-50"></i>
+                      No notifications
+                    </div>
+                  ) : (
+                    notifications.map((notification) => (
+                      <div key={notification.id} className={`border-b border-ocean-light/10 p-4 hover:bg-ocean-ice/30 transition-colors ${!notification.read ? 'bg-ocean-ice/10' : ''}`}>
+                        <div className="flex items-start gap-3">
+                          <div className="w-8 h-8 bg-amber-100 rounded-full flex items-center justify-center flex-shrink-0">
+                            <i className="fas fa-university text-amber-600 text-sm"></i>
+                          </div>
+                          <div className="flex-1">
+                            <p className="text-sm font-semibold text-textPrimary">
+                              Bank Transfer Request
+                            </p>
+                            <p className="text-xs text-textSecondary mt-1">
+                              {notification.guestName} requested bank transfer for {notification.roomType || 'room'}
+                            </p>
+                            <p className="text-xs text-ocean-mid mt-1 font-medium">
+                              ₱{notification.totalPrice?.toLocaleString()}
+                            </p>
+                            <p className="text-xs text-gray-400 mt-1">
+                              {new Date(notification.createdAt).toLocaleString()}
+                            </p>
+                          </div>
+                        </div>
+                      </div>
+                    ))
+                  )}
+                </div>
+                <div className="bg-ocean-ice/50 px-4 py-2 border-t border-ocean-light/10">
+                  <a
+                    href="/dashboard/admin/payment"
+                    className="text-xs text-ocean-mid hover:underline block text-center"
+                  >
+                    Go to Payment Settings →
+                  </a>
+                </div>
+              </div>
+            )}
+          </div>
+          
           {/* Role and Name Badge */}
           <div className="flex items-center gap-2 px-4 py-2 rounded-full bg-gradient-to-r from-blue-white to-white shadow-sm border border-ocean-light/10 hover:shadow-md transition-all duration-200">
             <i className="fas fa-user-circle text-ocean-light text-base"></i>

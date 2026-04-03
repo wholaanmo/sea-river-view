@@ -69,6 +69,12 @@ export default function AdminRooms() {
     
     return () => unsubscribe();
   }, []);
+
+  useEffect(() => {
+  if (modalType === 'edit' && selectedRoom) {
+    setHasChanges(detectChanges());
+  }
+}, [formData, selectedRoom, modalType]);
   
   // Auto-hide notification
   useEffect(() => {

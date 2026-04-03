@@ -159,7 +159,7 @@ const formatDateTime = (timestamp) => {
   };
 
   const handleCancelReservation = async (booking) => {
-    if (!confirm(`Are you sure you want to cancel booking ${booking.bookingId}? This will make the dates available again.`)) {
+    if (!confirm(`Are you sure you want to cancel booking ${booking.bookingId}? This will make the dates and time slots available again.`)) {
       return;
     }
 
@@ -176,10 +176,10 @@ const formatDateTime = (timestamp) => {
       await logAdminAction({
         action: 'Cancelled Reservation',
         module: 'Reservations',
-        details: `Cancelled booking ${booking.bookingId} for ${booking.guestInfo?.firstName} ${booking.guestInfo?.lastName} - ${booking.roomType}`
+        details: `Cancelled booking ${booking.bookingId} for ${booking.guestInfo?.firstName} ${booking.guestInfo?.lastName} - ${booking.roomType}. Dates and time slots are now available again.`
       });
 
-      showNotification(`Booking ${booking.bookingId} has been cancelled. Dates are now available again.`, 'success');
+      showNotification(`Booking ${booking.bookingId} has been cancelled. Dates and time slots are now available again.`, 'success');
     } catch (error) {
       console.error('Error cancelling reservation:', error);
       showNotification('Failed to cancel reservation.', 'error');
