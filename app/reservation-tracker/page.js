@@ -303,7 +303,7 @@ export default function ReservationTrackerPage() {
   };
 
   const calculateBalance = (totalPrice, status) => {
-    if (status !== 'confirmed' && status !== 'check-in' && status !== 'check-out') return 'Not applicable';
+    if (status !== 'confirmed' && status !== 'check-in' && status !== 'check-out') return 'Not confirmed';
     const total = typeof totalPrice === 'number' ? totalPrice : Number(totalPrice) || 0;
     const downPayment = total * 0.5;
     const balance = total - downPayment;

@@ -22,6 +22,8 @@ export default function RoomCalendar() {
   const [selectedTime, setSelectedTime] = useState('');
   const [loading, setLoading] = useState(true);
   const [bookedDates, setBookedDates] = useState({});
+  const [blockedSlots, setBlockedSlots] = useState({}); // { dateKey: { hour: true } }
+  const [fullyBlockedDates, setFullyBlockedDates] = useState({}); // { dateKey: true }
   const [roomDetails, setRoomDetails] = useState(null);
   const [timeSelectionError, setTimeSelectionError] = useState('');
 
@@ -43,13 +45,11 @@ export default function RoomCalendar() {
   const timeSlots = generateTimeSlots();
 
   const totalRoomUnits = (() => {
-    // Availability should be based on rooms not under maintenance.
     const totalRoomsFromUrl =
       Number.isFinite(totalRoomsParam) && totalRoomsParam >= 0 ? totalRoomsParam : null;
     const totalRoomsFromDetails = parseInt(roomDetails?.totalRooms, 10);
     const maintenanceRoomsFromDetails = parseInt(roomDetails?.maintenanceRooms, 10);
 
-    // Prefer the latest room doc values (real-time), fall back to URL while the room doc is loading.
     const effectiveTotalRooms =
       Number.isFinite(totalRoomsFromDetails) && totalRoomsFromDetails >= 0
         ? totalRoomsFromDetails
@@ -79,10 +79,10 @@ export default function RoomCalendar() {
       if (snap.exists()) setRoomDetails(snap.data());
       else setRoomDetails(null);
     });
-
     return () => unsubscribe();
   }, [roomId]);
 
+  // Bookings listener
   useEffect(() => {
     if (!roomId) {
       setLoading(false);
@@ -100,42 +100,33 @@ export default function RoomCalendar() {
       q,
       (querySnapshot) => {
         const booked = {};
-
         querySnapshot.forEach((docSnap) => {
           const booking = docSnap.data();
           const checkIn = toJsDate(booking.checkIn);
           const checkOut = toJsDate(booking.checkOut);
           const numberOfRooms = booking.numberOfRooms || 1;
-
           if (!checkIn || !checkOut || checkOut <= checkIn) return;
-
           let current = new Date(checkIn);
-
           while (current < checkOut) {
             const dateKey = current.toDateString();
-
             if (!booked[dateKey]) {
               booked[dateKey] = { times: {} };
               for (let h = 0; h < 24; h++) {
                 booked[dateKey].times[`${h}:00`] = 0;
               }
             }
-
             const startHour = current.getHours();
             const endHour =
               current.toDateString() === checkOut.toDateString()
                 ? checkOut.getHours()
                 : 24;
-
             for (let h = startHour; h < endHour; h++) {
               booked[dateKey].times[`${h}:00`] += numberOfRooms;
             }
-
             current.setDate(current.getDate() + 1);
             current.setHours(0, 0, 0, 0);
           }
         });
-
         setBookedDates(booked);
         setLoading(false);
       },
@@ -144,7 +135,49 @@ export default function RoomCalendar() {
         setLoading(false);
       }
     );
+    return () => unsubscribe();
+  }, [roomId]);
 
+  // Blocked slots listener (supports time ranges)
+  useEffect(() => {
+    if (!roomId) return;
+    const blockedRef = collection(db, 'unavailableSlots');
+    const q = query(blockedRef, where('roomId', '==', roomId));
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      const blocks = {}; // { dateKey: { hour: true } }
+      const fullyBlocked = {}; // { dateKey: true }
+      
+      snapshot.forEach(doc => {
+        const data = doc.data();
+        const dateKey = data.date;
+        const startHour = data.startHour;
+        const endHour = data.endHour;
+        
+        if (!blocks[dateKey]) blocks[dateKey] = {};
+        
+        // Mark every hour in the range as blocked
+        for (let hour = startHour; hour < endHour; hour++) {
+          blocks[dateKey][hour] = true;
+        }
+      });
+      
+      // Check which dates have all 24 hours blocked
+      Object.keys(blocks).forEach(dateKey => {
+        let allHoursBlocked = true;
+        for (let hour = 0; hour < 24; hour++) {
+          if (!blocks[dateKey][hour]) {
+            allHoursBlocked = false;
+            break;
+          }
+        }
+        if (allHoursBlocked) {
+          fullyBlocked[dateKey] = true;
+        }
+      });
+      
+      setBlockedSlots(blocks);
+      setFullyBlockedDates(fullyBlocked);
+    });
     return () => unsubscribe();
   }, [roomId]);
 
@@ -156,7 +189,6 @@ export default function RoomCalendar() {
     const period = timeMatch[3].toUpperCase();
     if (period === 'PM' && hours !== 12) hours += 12;
     else if (period === 'AM' && hours === 12) hours = 0;
-
     if (!canFitRequiredBookingDuration(selectedDate, hours)) {
       setSelectedTime('');
     }
@@ -169,45 +201,45 @@ export default function RoomCalendar() {
     const lastDay = new Date(year, month + 1, 0);
     const daysInMonth = lastDay.getDate();
     const startingDayOfWeek = firstDay.getDay();
-
     const days = [];
-    for (let i = 0; i < startingDayOfWeek; i++) {
-      days.push(null);
-    }
-    for (let i = 1; i <= daysInMonth; i++) {
-      days.push(new Date(year, month, i));
-    }
+    for (let i = 0; i < startingDayOfWeek; i++) days.push(null);
+    for (let i = 1; i <= daysInMonth; i++) days.push(new Date(year, month, i));
     return days;
   };
 
   const BOOKING_DURATION_HOURS = 22;
 
-  // Hour is available if booked count < total room units for this type
-  const isHourAvailable = (date, hour) => {
-    if (!date) return false;
-    if (totalRoomUnits <= 0) return false;
+const isHourAvailable = (date, hour) => {
+  if (!date) return false;
+  if (totalRoomUnits <= 0) return false;
+  const dateKey = date.toISOString().split('T')[0];
+  
+  // Get blocked units for this hour
+  const blockedUnits = blockedSlots[dateKey]?.[hour]?.blockedUnits || 0;
+  
+  const d = new Date(date);
+  d.setHours(hour, 0, 0, 0);
+  const bookingDateKey = d.toDateString();
+  const bookedCount = bookedDates[bookingDateKey]?.times?.[`${hour}:00`] || 0;
+  
+  // Available units = total - booked - blocked
+  const availableUnits = totalRoomUnits - bookedCount - blockedUnits;
+  return availableUnits > 0;
+};
 
-    const d = new Date(date);
-    d.setHours(hour, 0, 0, 0);
-    const dateKey = d.toDateString();
-    const bookedCount = bookedDates[dateKey]?.times?.[`${hour}:00`] || 0;
-    return bookedCount < totalRoomUnits;
-  };
-
-  // A start time is valid only if it can support a continuous 22-hour booking without overlap.
   const canFitRequiredBookingDuration = (date, startHour) => {
     if (!date) return false;
     if (totalRoomUnits <= 0) return false;
-
     for (let offset = 0; offset < BOOKING_DURATION_HOURS; offset++) {
       const d = new Date(date);
       d.setHours(startHour + offset, 0, 0, 0);
-      const dateKey = d.toDateString();
+      const dateKey = d.toISOString().split('T')[0];
       const hour = d.getHours();
-      const bookedCount = bookedDates[dateKey]?.times?.[`${hour}:00`] || 0;
+      if (blockedSlots[dateKey] && blockedSlots[dateKey][hour]) return false;
+      const bookingDateKey = d.toDateString();
+      const bookedCount = bookedDates[bookingDateKey]?.times?.[`${hour}:00`] || 0;
       if (bookedCount >= totalRoomUnits) return false;
     }
-
     return true;
   };
 
@@ -218,24 +250,18 @@ export default function RoomCalendar() {
     return false;
   };
 
-  // A date is selectable if it has at least one available hour (show times),
-  // but the 22-hour rule is enforced when selecting a time and on proceed.
   const isDateSelectable = (date) => {
     if (!date) return false;
-
     const today = new Date();
     today.setHours(0, 0, 0, 0);
     if (date < today) return false;
-
     const minBookableDate = new Date();
     minBookableDate.setDate(minBookableDate.getDate() + 2);
     minBookableDate.setHours(0, 0, 0, 0);
     if (date < minBookableDate) return false;
-
     return hasAnyAvailableHour(date);
   };
 
-  // Date is fully booked when it has no available hours.
   const isDateFullyBooked = (date) => {
     if (!date) return false;
     return !hasAnyAvailableHour(date);
@@ -256,6 +282,18 @@ export default function RoomCalendar() {
     return date < minBookableDate && date >= today;
   };
 
+  const hasAnyBlockedSlot = (date) => {
+    if (!date) return false;
+    const dateKey = date.toISOString().split('T')[0];
+    return blockedSlots[dateKey] && Object.keys(blockedSlots[dateKey]).length > 0;
+  };
+
+  const isDateFullyBlockedByAdmin = (date) => {
+    if (!date) return false;
+    const dateKey = date.toISOString().split('T')[0];
+    return fullyBlockedDates[dateKey] === true;
+  };
+
   const handleDateSelect = (date) => {
     if (!isDateSelectable(date)) return;
     setSelectedDate(date);
@@ -266,7 +304,6 @@ export default function RoomCalendar() {
   const handleTimeSelect = (timeSlot) => {
     if (!selectedDate) return;
     if (!isHourAvailable(selectedDate, timeSlot.hour)) return;
-
     if (!canFitRequiredBookingDuration(selectedDate, timeSlot.hour)) {
       setSelectedTime('');
       setTimeSelectionError(
@@ -274,7 +311,6 @@ export default function RoomCalendar() {
       );
       return;
     }
-
     setTimeSelectionError('');
     setSelectedTime(timeSlot.display);
   };
@@ -282,20 +318,13 @@ export default function RoomCalendar() {
   const handleProceed = () => {
     if (selectedDate && selectedTime) {
       const checkInDateTime = new Date(selectedDate);
-
       const timeMatch = selectedTime.match(/(\d+):(\d+)\s*(AM|PM)/i);
       if (timeMatch) {
         let hours = parseInt(timeMatch[1]);
         const minutes = parseInt(timeMatch[2]);
         const period = timeMatch[3].toUpperCase();
-
-        if (period === 'PM' && hours !== 12) {
-          hours += 12;
-        } else if (period === 'AM' && hours === 12) {
-          hours = 0;
-        }
-
-        // Final validation: ensure the 22-hour continuous booking still fits.
+        if (period === 'PM' && hours !== 12) hours += 12;
+        else if (period === 'AM' && hours === 12) hours = 0;
         if (!canFitRequiredBookingDuration(selectedDate, hours)) {
           setSelectedTime('');
           setTimeSelectionError(
@@ -303,10 +332,8 @@ export default function RoomCalendar() {
           );
           return;
         }
-
         checkInDateTime.setHours(hours, minutes, 0, 0);
       }
-
       router.push(`/rooms/booking?roomId=${roomId}&roomType=${encodeURIComponent(roomType)}&price=${price}&maxCapacity=${maxCapacity}&totalRooms=${roomDetails?.totalRooms ?? totalRoomUnits}&checkIn=${checkInDateTime.toISOString()}`);
     }
   };
@@ -407,11 +434,12 @@ export default function RoomCalendar() {
                       {days.map((day, index) => {
                         if (!day) return <div key={index} className="aspect-square"></div>;
 
-                        const isSelectable = isDateSelectable(day);
                         const isPast = isDatePast(day);
                         const isTooSoon = isDateTooSoon(day);
-                        const isSelected = selectedDate && selectedDate.toDateString() === day.toDateString();
                         const isFullyBooked = isDateFullyBooked(day);
+                        const isSelected = selectedDate && selectedDate.toDateString() === day.toDateString();
+                        const isFullyBlockedByAdmin = isDateFullyBlockedByAdmin(day);
+                        const hasPartialBlock = hasAnyBlockedSlot(day) && !isFullyBlockedByAdmin;
 
                         let bgColor = 'bg-white';
                         let textColor = 'text-textPrimary';
@@ -438,15 +466,18 @@ export default function RoomCalendar() {
                           borderClass = 'border border-red-200';
                           cursorClass = 'cursor-not-allowed';
                           titleText = 'Fully booked';
+                        } else if (isFullyBlockedByAdmin) {
+                          bgColor = 'bg-orange-100';
+                          textColor = 'text-orange-700';
+                          borderClass = 'border border-orange-200';
+                          cursorClass = 'cursor-not-allowed';
+                          titleText = 'Not Available (all hours blocked by admin)';
                         } else if (isSelected) {
                           bgColor = 'bg-ocean-mid';
                           textColor = 'text-white';
                           borderClass = 'border border-ocean-mid';
                           hoverClass = 'hover:bg-ocean-mid';
                           titleText = 'Selected';
-                        } else if (isSelectable) {
-                          hoverClass = 'hover:bg-ocean-ice';
-                          titleText = 'Available';
                         } else {
                           hoverClass = 'hover:bg-ocean-ice';
                           titleText = 'Available';
@@ -456,13 +487,16 @@ export default function RoomCalendar() {
                           <button
                             key={index}
                             onClick={() => handleDateSelect(day)}
-                            disabled={isPast || isTooSoon || isFullyBooked}
+                            disabled={isPast || isTooSoon || isFullyBooked || isFullyBlockedByAdmin}
                             title={titleText}
                             className={`w-full pt-[100%] relative rounded-lg transition-all duration-200 ${bgColor} ${borderClass} ${hoverClass} ${cursorClass}`}
                           >
                             <span className={`absolute inset-0 flex items-center justify-center text-sm font-medium ${textColor}`}>
                               {day.getDate()}
                             </span>
+                            {hasPartialBlock && !isPast && !isTooSoon && !isFullyBooked && !isFullyBlockedByAdmin && (
+                              <span className="absolute bottom-1 left-1/2 transform -translate-x-1/2 w-1.5 h-1.5 bg-orange-400 rounded-full"></span>
+                            )}
                           </button>
                         );
                       })}
@@ -470,7 +504,7 @@ export default function RoomCalendar() {
                   </div>
 
                   {/* Legend */}
-                  <div className="mt-6 pt-4 border-t border-ocean-light/10 flex justify-center gap-6 text-xs flex-shrink-0">
+                  <div className="mt-6 pt-4 border-t border-ocean-light/10 flex justify-center gap-6 text-xs flex-shrink-0 flex-wrap">
                     <div className="flex items-center gap-1.5">
                       <div className="w-3 h-3 bg-white border border-gray-300 rounded"></div>
                       <span className="text-textSecondary">Available</span>
@@ -481,11 +515,15 @@ export default function RoomCalendar() {
                     </div>
                     <div className="flex items-center gap-1.5">
                       <div className="w-3 h-3 bg-gray-100 border border-gray-200 rounded"></div>
-                      <span className="text-textSecondary">Past/Unavailable</span>
+                      <span className="text-textSecondary">Past / Too Soon</span>
                     </div>
                     <div className="flex items-center gap-1.5">
                       <div className="w-3 h-3 bg-ocean-mid rounded"></div>
                       <span className="text-textSecondary">Selected</span>
+                    </div>
+                    <div className="flex items-center gap-1.5">
+                      <div className="w-2 h-2 bg-orange-400 rounded-full"></div>
+                      <span className="text-textSecondary">Has Unavailable Slots</span>
                     </div>
                   </div>
                 </div>
@@ -576,24 +614,29 @@ export default function RoomCalendar() {
                     )}
                     <div className="grid grid-cols-2 gap-2 max-h-[400px] overflow-y-auto">
                       {timeSlots.map((slot) => {
-                        const isAvailable = isHourAvailable(selectedDate, slot.hour);
+                        const dateKey = selectedDate.toISOString().split('T')[0];
+                        const isBlocked = !!blockedSlots[dateKey]?.[slot.hour];
+                        const isAvailable = !isBlocked && isHourAvailable(selectedDate, slot.hour);
+                        const isFullyBookedSlot = !isBlocked && !isHourAvailable(selectedDate, slot.hour);
                         return (
                           <button
                             type="button"
                             key={slot.value}
                             onClick={() => isAvailable && handleTimeSelect(slot)}
                             disabled={!isAvailable}
-                            aria-disabled={!isAvailable}
                             className={`py-2.5 px-3 rounded-lg text-sm font-medium transition-all duration-200 ${
                               selectedTime === slot.display
                                 ? 'bg-ocean-mid text-white shadow-md'
                                 : !isAvailable
-                                ? 'bg-gray-100 text-gray-400 cursor-not-allowed pointer-events-none select-none'
+                                ? 'bg-gray-100 text-gray-400 cursor-not-allowed'
                                 : 'bg-ocean-ice border border-ocean-light/20 text-textPrimary hover:bg-ocean-light/20 hover:shadow-sm'
                             }`}
                           >
                             {slot.display}
-                            {!isAvailable && (
+                            {!isAvailable && isBlocked && (
+                              <span className="block text-[10px] text-orange-600 mt-0.5">Not Available</span>
+                            )}
+                            {!isAvailable && !isBlocked && isFullyBookedSlot && (
                               <span className="block text-[10px] text-red-500 mt-0.5">Fully Booked</span>
                             )}
                           </button>
