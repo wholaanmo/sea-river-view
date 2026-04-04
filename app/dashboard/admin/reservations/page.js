@@ -18,6 +18,7 @@ export default function AdminReservations() {
   const [actionLoading, setActionLoading] = useState({});
   const [showPaymentModal, setShowPaymentModal] = useState(false);
   const [selectedBooking, setSelectedBooking] = useState(null);
+  const [refundModal, setRefundModal] = useState({ show: false, booking: null, sending: false });
   
   // New state for confirmation modals
   const [confirmModal, setConfirmModal] = useState({ show: false, booking: null, type: '' });
@@ -246,6 +247,43 @@ const getStatusColor = (status) => {
     }
   };
 
+ const handleSendRefundNotification = async () => {
+  const booking = refundModal.booking;
+  if (!booking) return;
+
+  setRefundModal(prev => ({ ...prev, sending: true }));
+  try {
+    const response = await fetch('/api/admin/send-refund-notification', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ bookingId: booking.id })
+    });
+    const data = await response.json();
+
+    if (response.ok) {
+      // Calculate refund amount for audit log
+      const total = typeof booking.totalPrice === 'number' ? booking.totalPrice : Number(booking.totalPrice) || 0;
+      const downPayment = total * 0.5;
+      const refundAmount = downPayment * 0.5;
+      
+      await logAdminAction({
+        action: 'Refund Notification Sent',
+        module: 'Reservations',
+        details: `Sent refund notification for booking ${booking.bookingId} to ${booking.guestInfo?.firstName} ${booking.guestInfo?.lastName} (${booking.guestInfo?.email}). Refund amount: ₱${refundAmount.toLocaleString()} (50% of down payment)`
+      });
+      
+      showNotification(`Refund notification sent to ${booking.guestInfo?.email}`, 'success');
+    } else {
+      showNotification(data.error || 'Failed to send refund notification', 'error');
+    }
+  } catch (error) {
+    console.error('Error sending refund notification:', error);
+    showNotification('Failed to send refund notification', 'error');
+  } finally {
+    setRefundModal({ show: false, booking: null, sending: false });
+  }
+};
+
   const showNotification = (message, type = 'success') => {
     setNotification({ show: true, message, type });
   };
@@ -258,13 +296,23 @@ const getStatusColor = (status) => {
   };
 
   // Helper function to calculate remaining balance
-  const calculateBalance = (booking) => {
-    if (booking.status !== 'confirmed') return 'Not confirmed';
-    const total = typeof booking.totalPrice === 'number' ? booking.totalPrice : Number(booking.totalPrice) || 0;
-    const downPayment = total * 0.5;
+const calculateBalance = (booking) => {
+  const total = typeof booking.totalPrice === 'number' ? booking.totalPrice : Number(booking.totalPrice) || 0;
+  const downPayment = total * 0.5;
+  
+  if (booking.status === 'confirmed') {
     const balance = total - downPayment;
     return `₱${balance.toLocaleString()}`;
-  };
+  } else if (booking.status === 'cancelled-by-guest') {
+    // 50% of down payment
+    const refundableAmount = downPayment * 0.5;
+    return `₱${refundableAmount.toLocaleString()}`;
+  } else if (booking.status === 'cancelled') {
+    return 'Not Confirmed';
+  } else {
+    return 'Not Confirmed';
+  }
+};
 
   const filteredBookings = bookings.filter(booking => {
     const matchesSearch = 
@@ -442,22 +490,33 @@ const getStatusColor = (status) => {
                               {booking.status?.charAt(0).toUpperCase() + booking.status?.slice(1)}
                             </span>
                            </td>
-                          <td className="px-4 py-3">
-                            {/* Only View Payment button remains in Actions column */}
-                            {(booking.paymentProof || booking.status === 'pending') && (
-                              <button
-                                onClick={() => {
-                                  setSelectedBooking(booking);
-                                  setShowPaymentModal(true);
-                                }}
-                                className="px-3 py-1.5 text-xs font-medium text-blue-600 hover:text-blue-700 hover:bg-blue-50 rounded-lg transition-all duration-200"
-                                title="View Payment Proof"
-                              >
-                                <i className="fas fa-receipt mr-1"></i>
-                                View Payment
-                              </button>
-                            )}
-                           </td>
+<td className="px-4 py-3">
+  <div className="flex gap-2">
+    {(booking.paymentProof || booking.status === 'pending') && (
+      <button
+        onClick={() => {
+          setSelectedBooking(booking);
+          setShowPaymentModal(true);
+        }}
+        className="px-3 py-1.5 text-xs font-medium text-blue-600 hover:text-blue-700 hover:bg-blue-50 rounded-lg transition-all duration-200"
+        title="View Payment Proof"
+      >
+        <i className="fas fa-receipt mr-1"></i>
+        View Payment
+      </button>
+    )}
+    {booking.status === 'cancelled-by-guest' && (
+      <button
+        onClick={() => setRefundModal({ show: true, booking, sending: false })}
+        className="px-3 py-1.5 text-xs font-medium text-green-600 hover:text-green-700 hover:bg-green-50 rounded-lg transition-all duration-200"
+        title="Send Refund Notification"
+      >
+        <i className="fas fa-dollar-sign mr-1"></i>
+        Refund Notify
+      </button>
+    )}
+  </div>
+</td>  
                           <td className="px-4 py-3 text-sm text-textSecondary">
                             {formatDateTime(booking.createdAt)}
                            </td>
@@ -531,6 +590,18 @@ const getStatusColor = (status) => {
                     {selectedBooking.status?.charAt(0).toUpperCase() + selectedBooking.status?.slice(1)}
                   </span>
                 </div>
+                <div>
+  <p className="text-xs font-semibold text-neutral uppercase tracking-wide">Check-in Date</p>
+  <p className="text-textPrimary font-medium">
+    {formatDateTimeFromDate(selectedBooking.checkIn)}
+  </p>
+</div>
+<div>
+  <p className="text-xs font-semibold text-neutral uppercase tracking-wide">Check-out Date</p>
+  <p className="text-textPrimary font-medium">
+    {formatDateTimeFromDate(selectedBooking.checkOut)}
+  </p>
+</div>
               </div>
               
               <div>
@@ -690,6 +761,47 @@ const getStatusColor = (status) => {
           </div>
         </div>
       )}
+
+      {/* Refund Notification Confirmation Modal */}
+{refundModal.show && refundModal.booking && (
+  <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-[60] p-4">
+    <div className="bg-white rounded-2xl w-full max-w-sm p-6 shadow-2xl animate-scaleIn">
+      <div className="text-center mb-5">
+        <div className="w-14 h-14 mx-auto mb-3 rounded-full bg-green-100 flex items-center justify-center">
+          <i className="fas fa-envelope-open-text text-green-500 text-2xl"></i>
+        </div>
+        <h3 className="text-lg font-bold text-textPrimary mb-2">Send Refund Notification</h3>
+        <p className="text-textSecondary text-sm">
+          Send an email to <strong>{refundModal.booking.guestInfo?.firstName} {refundModal.booking.guestInfo?.lastName}</strong><br />
+          confirming that 50% of their down payment has been refunded.
+        </p>
+        <p className="text-xs text-neutral mt-2">
+          Booking ID: {refundModal.booking.bookingId}
+        </p>
+      </div>
+      <div className="flex gap-3 justify-center">
+        <button
+          onClick={() => setRefundModal({ show: false, booking: null, sending: false })}
+          className="px-5 py-2 border border-ocean-light/20 rounded-xl text-textSecondary text-sm font-medium hover:bg-ocean-ice transition-all duration-300"
+          disabled={refundModal.sending}
+        >
+          Cancel
+        </button>
+        <button
+          onClick={handleSendRefundNotification}
+          disabled={refundModal.sending}
+          className="px-5 py-2 bg-gradient-to-r from-green-500 to-green-600 rounded-xl text-white text-sm font-medium hover:shadow-lg hover:-translate-y-0.5 transition-all duration-300 disabled:opacity-50"
+        >
+          {refundModal.sending ? (
+            <><i className="fas fa-spinner fa-spin mr-1"></i> Sending...</>
+          ) : (
+            <><i className="fas fa-paper-plane mr-1"></i> Send Email</>
+          )}
+        </button>
+      </div>
+    </div>
+  </div>
+)}
 
       <style jsx>{`
         @keyframes slideInRight {

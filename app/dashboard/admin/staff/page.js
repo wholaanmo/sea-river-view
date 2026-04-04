@@ -3,10 +3,11 @@
 
 import { useState, useEffect } from 'react';
 import { auth, db } from '../../../../lib/firebase';
-import { collection, query, where, onSnapshot, updateDoc, doc, setDoc } from 'firebase/firestore';
+import { collection, query, where, onSnapshot, updateDoc, doc, setDoc, getDoc } from 'firebase/firestore';
 import { createUserWithEmailAndPassword, sendEmailVerification } from 'firebase/auth';
 import { useRouter } from 'next/navigation';
 import { logAdminAction } from '../../../../lib/auditLogger';
+import { sendStaffVerificationEmail } from '../../../../lib/staffEmailService';
 
 export default function StaffManagement() {
   const [staff, setStaff] = useState([]);
@@ -23,7 +24,7 @@ export default function StaffManagement() {
     password: '',
     confirmPassword: '',
     role: 'staff',
-    status: 'active',
+    status: 'active', // not used in add flow, kept for consistency
     phone: '',
   });
   
@@ -38,7 +39,7 @@ export default function StaffManagement() {
   const [originalFormData, setOriginalFormData] = useState({});
   
   // Resend verification modal
-  const [resendModal, setResendModal] = useState({ show: false, email: '', staffId: '' });
+  const [resendModal, setResendModal] = useState({ show: false, email: '', staffId: '', name: '' });
   const [resendLoading, setResendLoading] = useState(false);
   
   // Confirmation modal states
@@ -169,110 +170,115 @@ export default function StaffManagement() {
     setNotification({ show: true, message, type });
   };
 
-  const handleAddStaff = async (e) => {
-    e.preventDefault();
-    const errors = validateForm();
+ const handleAddStaff = async (e) => {
+  e.preventDefault();
+  const errors = validateForm();
+  
+  if (Object.keys(errors).length > 0) {
+    setFormErrors(errors);
+    return;
+  }
+  
+  setActionLoading(true);
+  
+  try {
+    // Create user in Firebase Auth
+    const userCredential = await createUserWithEmailAndPassword(
+      auth, 
+      formData.email, 
+      formData.password
+    );
     
-    if (Object.keys(errors).length > 0) {
-      setFormErrors(errors);
-      return;
+    const uid = userCredential.user.uid;
+    
+    // Generate a unique verification token
+    const verificationToken = Math.random().toString(36).substring(2, 15) + 
+                            Math.random().toString(36).substring(2, 15);
+    const verificationExpiresAt = new Date();
+    verificationExpiresAt.setMinutes(verificationExpiresAt.getMinutes() + 15);
+    
+    // Create user document in Firestore
+    await setDoc(doc(db, 'users', uid), {
+      uid: uid,
+      name: formData.name,
+      email: formData.email,
+      role: formData.role,
+      status: 'pending_verification',
+      phone: formData.phone || '',
+      emailVerified: false,
+      verificationToken: verificationToken,
+      verificationExpiresAt: verificationExpiresAt.toISOString(),
+      createdAt: new Date().toISOString(),
+      createdBy: auth.currentUser?.uid || ''
+    });
+    
+    // Send verification email using Nodemailer with role
+    const verificationLink = `${process.env.NEXT_PUBLIC_BASE_URL || window.location.origin}/verify-staff?token=${verificationToken}&email=${encodeURIComponent(formData.email)}`;
+    await sendStaffVerificationEmail(formData.email, formData.name, verificationLink, formData.role);
+    
+    // Add audit log
+    await logAdminAction({
+      action: 'Added staff member',
+      module: 'Staff Management',
+      details: `Added new staff member: ${formData.name} (${formData.email}) with role: ${formData.role}`
+    });
+    
+    showNotification(`Staff account created successfully! Verification email sent. Link expires in 15 minutes.`);
+    resetForm();
+    
+    setTimeout(() => {
+      setShowModal(false);
+    }, 2000);
+    
+  } catch (error) {
+    console.error('Error creating staff:', error);
+    
+    if (error.code === 'auth/email-already-in-use') {
+      showNotification('Email is already in use.', 'error');
+    } else {
+      showNotification('Failed to create staff account. Please try again.', 'error');
     }
-    
-    setActionLoading(true);
-    
-    try {
-      const userCredential = await createUserWithEmailAndPassword(
-        auth, 
-        formData.email, 
-        formData.password
-      );
-      
-      const uid = userCredential.user.uid;
-      
-      // Send email verification with expiration
-      await sendEmailVerification(userCredential.user);
-      
-      // Set verification expiration time (15 minutes from now)
-      const verificationExpiresAt = new Date();
-      verificationExpiresAt.setMinutes(verificationExpiresAt.getMinutes() + 15);
-      
-      await setDoc(doc(db, 'users', uid), {
-        uid: uid,
-        name: formData.name,
-        email: formData.email,
-        role: formData.role,
-        status: formData.status === 'active' ? 'pending_verification' : formData.status,
-        phone: formData.phone || '',
-        emailVerified: false,
-        verificationExpiresAt: verificationExpiresAt.toISOString(),
-        createdAt: new Date().toISOString(),
-        createdBy: auth.currentUser?.uid || ''
-      });
-      
-      // Add audit log
-      await logAdminAction({
-        action: 'Added staff member',
-        module: 'Staff Management',
-        details: `Added new staff member: ${formData.name} (${formData.email}) with role: ${formData.role}`
-      });
-      
-      showNotification(`Staff account created successfully! Verification email sent. Link expires in 15 minutes. Status: ${formData.status === 'active' ? 'Pending Verification' : 'Inactive'}`);
-      resetForm();
-      
-      setTimeout(() => {
-        setShowModal(false);
-      }, 2000);
-      
-    } catch (error) {
-      console.error('Error creating staff:', error);
-      
-      if (error.code === 'auth/email-already-in-use') {
-        showNotification('Email is already in use.', 'error');
-      } else {
-        showNotification('Failed to create staff account. Please try again.', 'error');
-      }
-    } finally {
-      setActionLoading(false);
-    }
-  };
+  } finally {
+    setActionLoading(false);
+  }
+};
 
-  const handleResendVerification = async () => {
-    setResendLoading(true);
-    try {
-      // Since we can't directly get user by email from client, we'll need to handle this differently
-      // For now, we'll use the existing auth user if available
-      const user = auth.currentUser;
-      if (user && user.email === resendModal.email) {
-        await sendEmailVerification(user);
-        
-        // Update verification expiration
-        const newExpiration = new Date();
-        newExpiration.setMinutes(newExpiration.getMinutes() + 15);
-        
-        const userRef = doc(db, 'users', resendModal.staffId);
-        await updateDoc(userRef, {
-          verificationExpiresAt: newExpiration.toISOString()
-        });
-        
-        // Add audit log
-        await logAdminAction({
-          action: 'Resent verification email',
-          module: 'Staff Management',
-          details: `Resent verification email to: ${resendModal.email}`
-        });
-        
-        showNotification('New verification email sent! Link expires in 15 minutes.');
-        setResendModal({ show: false, email: '', staffId: '' });
-      } else {
-        showNotification('Unable to resend verification. Please contact administrator.', 'error');
-      }
-    } catch (error) {
-      console.error('Error resending verification:', error);
-      showNotification('Failed to send verification email. Please try again.', 'error');
-    } finally {
-      setResendLoading(false);
-    }
-  };
+const handleResendVerification = async () => {
+  setResendLoading(true);
+  try {
+    // Generate new verification token
+    const verificationToken = Math.random().toString(36).substring(2, 15) + 
+                            Math.random().toString(36).substring(2, 15);
+    const verificationExpiresAt = new Date();
+    verificationExpiresAt.setMinutes(verificationExpiresAt.getMinutes() + 15);
+    
+    // Update user document with new token
+    const userRef = doc(db, 'users', resendModal.staffId);
+    await updateDoc(userRef, {
+      verificationToken: verificationToken,
+      verificationExpiresAt: verificationExpiresAt.toISOString()
+    });
+    
+    // Send new verification email
+    const verificationLink = `${process.env.NEXT_PUBLIC_BASE_URL || window.location.origin}/api/auth/verify-staff?token=${verificationToken}&email=${encodeURIComponent(resendModal.email)}`;
+    await sendStaffVerificationEmail(resendModal.email, resendModal.name || 'Staff Member', verificationLink);
+    
+    // Add audit log
+    await logAdminAction({
+      action: 'Resent verification email',
+      module: 'Staff Management',
+      details: `Resent verification email to: ${resendModal.email}`
+    });
+    
+    showNotification('New verification email sent! Link expires in 15 minutes.');
+    setResendModal({ show: false, email: '', staffId: '', name: '' });
+  } catch (error) {
+    console.error('Error resending verification:', error);
+    showNotification('Failed to send verification email. Please try again.', 'error');
+  } finally {
+    setResendLoading(false);
+  }
+};
 
   const handleUpdateStaff = async (e) => {
     e.preventDefault();
@@ -320,6 +326,12 @@ export default function StaffManagement() {
   };
 
   const handleToggleStatus = async (staffMember) => {
+    // Prevent status change if email is not verified
+    if (!staffMember.emailVerified) {
+      showNotification('Cannot change status: email not verified yet.', 'error');
+      return;
+    }
+
     const newStatus = staffMember.status === 'active' ? 'inactive' : 'active';
     setConfirmationModal({
       show: true,
@@ -541,37 +553,37 @@ export default function StaffManagement() {
         </div>
       )}
 
-      {/* Resend Verification Modal */}
-      {resendModal.show && (
-        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-[70] p-4">
-          <div className="bg-white rounded-2xl w-full max-w-sm p-6 shadow-2xl animate-scaleIn">
-            <div className="text-center mb-5">
-              <div className="w-14 h-14 mx-auto mb-3 rounded-full bg-blue-100 flex items-center justify-center">
-                <i className="fas fa-envelope text-blue-500 text-2xl"></i>
-              </div>
-              <h3 className="text-lg font-bold text-textPrimary mb-2">Resend Verification Email</h3>
-              <p className="text-textSecondary text-sm">
-                Send a new verification link to {resendModal.email}? The link will expire in 15 minutes.
-              </p>
-            </div>
-            <div className="flex gap-3 justify-center">
-              <button
-                onClick={() => setResendModal({ show: false, email: '', staffId: '' })}
-                className="px-5 py-2 border border-ocean-light/20 rounded-xl text-textSecondary text-sm font-medium hover:bg-ocean-ice transition-all duration-300"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={handleResendVerification}
-                disabled={resendLoading}
-                className="px-5 py-2 bg-gradient-to-r from-ocean-mid to-ocean-light rounded-xl text-white text-sm font-medium hover:shadow-lg hover:-translate-y-0.5 transition-all duration-300 disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:translate-y-0"
-              >
-                {resendLoading ? <i className="fas fa-spinner fa-spin"></i> : 'Send Email'}
-              </button>
-            </div>
-          </div>
+  {/* Resend Verification Modal */}
+{resendModal.show && (
+  <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-[70] p-4">
+    <div className="bg-white rounded-2xl w-full max-w-sm p-6 shadow-2xl animate-scaleIn">
+      <div className="text-center mb-5">
+        <div className="w-14 h-14 mx-auto mb-3 rounded-full bg-blue-100 flex items-center justify-center">
+          <i className="fas fa-envelope text-blue-500 text-2xl"></i>
         </div>
-      )}
+        <h3 className="text-lg font-bold text-textPrimary mb-2">Resend Verification Email</h3>
+        <p className="text-textSecondary text-sm">
+          Send a new verification link to {resendModal.name} ({resendModal.email})? The link will expire in 15 minutes.
+        </p>
+      </div>
+      <div className="flex gap-3 justify-center">
+        <button
+          onClick={() => setResendModal({ show: false, email: '', staffId: '', name: '' })}
+          className="px-5 py-2 border border-ocean-light/20 rounded-xl text-textSecondary text-sm font-medium hover:bg-ocean-ice transition-all duration-300"
+        >
+          Cancel
+        </button>
+        <button
+          onClick={handleResendVerification}
+          disabled={resendLoading}
+          className="px-5 py-2 bg-gradient-to-r from-ocean-mid to-ocean-light rounded-xl text-white text-sm font-medium hover:shadow-lg hover:-translate-y-0.5 transition-all duration-300 disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:translate-y-0"
+        >
+          {resendLoading ? <i className="fas fa-spinner fa-spin"></i> : 'Send Email'}
+        </button>
+      </div>
+    </div>
+  </div>
+)}
 
       {/* Filters and Search */}
       <div className="flex gap-4 mb-6 flex-wrap">
@@ -628,6 +640,8 @@ export default function StaffManagement() {
               ) : (
                 filteredStaff.map((member) => {
                   const statusDisplay = getStatusDisplay(member.status);
+                  // Disable toggle if email not verified OR status is pending_verification
+                  const isToggleDisabled = !member.emailVerified || member.status === 'pending_verification';
                   return (
                     <tr key={member.id} className="border-b border-ocean-light/10 hover:bg-ocean-ice/30 transition-colors">
                       <td className="px-4 py-3">
@@ -651,20 +665,20 @@ export default function StaffManagement() {
                       </td>
                       <td className="px-4 py-3">
                         <div className="flex gap-2">
-                          {member.status === 'pending_verification' && (
-                            <button
-                              onClick={() => setResendModal({ show: true, email: member.email, staffId: member.id })}
-                              className="p-2 rounded-lg border border-ocean-light/20 bg-white text-blue-600 hover:bg-blue-600 hover:text-white hover:border-blue-600 transition-all duration-200"
-                              title="Resend Verification Email"
-                            >
-                              <i className="fas fa-paper-plane"></i>
-                            </button>
-                          )}
+{member.status === 'pending_verification' && (
+  <button
+    onClick={() => setResendModal({ show: true, email: member.email, staffId: member.id, name: member.name })}
+    className="p-2 rounded-lg border border-ocean-light/20 bg-white text-blue-600 hover:bg-blue-600 hover:text-white hover:border-blue-600 transition-all duration-200"
+    title="Resend Verification Email"
+  >
+    <i className="fas fa-paper-plane"></i>
+  </button>
+)}
                           <button
                             onClick={() => handleToggleStatus(member)}
                             className="p-2 rounded-lg border border-ocean-light/20 bg-white text-textSecondary hover:bg-ocean-light hover:text-white hover:border-ocean-light transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-white disabled:hover:text-textSecondary"
                             title={member.status === 'active' ? 'Deactivate' : 'Activate'}
-                            disabled={member.status === 'pending_verification'}
+                            disabled={isToggleDisabled}
                           >
                             <i className={`fas ${member.status === 'active' ? 'fa-ban' : 'fa-check-circle'}`}></i>
                           </button>
@@ -747,62 +761,65 @@ export default function StaffManagement() {
                   {formErrors.name && <p className="text-red-500 text-xs mt-1">{formErrors.name}</p>}
                 </div>
 
-                {/* Email */}
-                <div className="mb-4">
-                  <label className="block mb-1.5 text-sm font-medium text-textPrimary">Email Address *</label>
-                  <input
-                    type="email"
-                    name="email"
-                    value={formData.email}
-                    onChange={handleInputChange}
-                    className={`w-full px-3 py-2.5 border ${formErrors.email ? 'border-red-500' : 'border-ocean-light/20'} rounded-xl text-sm focus:outline-none focus:border-ocean-light focus:ring-2 focus:ring-ocean-light/20 transition-all duration-300`}
-                  />
-                  {formErrors.email && <p className="text-red-500 text-xs mt-1">{formErrors.email}</p>}
-                </div>
+ {/* Email */}
+<div className="mb-4">
+  <label className="block mb-1.5 text-sm font-medium text-textPrimary">Email Address *</label>
+  <input
+    type="email"
+    name="email"
+    value={formData.email}
+    onChange={handleInputChange}
+    autoComplete="new-email"
+    className={`w-full px-3 py-2.5 border ${formErrors.email ? 'border-red-500' : 'border-ocean-light/20'} rounded-xl text-sm focus:outline-none focus:border-ocean-light focus:ring-2 focus:ring-ocean-light/20 transition-all duration-300`}
+  />
+  {formErrors.email && <p className="text-red-500 text-xs mt-1">{formErrors.email}</p>}
+</div>
 
-                {/* Password */}
-                <div className="mb-4">
-                  <label className="block mb-1.5 text-sm font-medium text-textPrimary">Password *</label>
-                  <div className="relative">
-                    <input
-                      type={showPassword ? 'text' : 'password'}
-                      name="password"
-                      value={formData.password}
-                      onChange={handleInputChange}
-                      className={`w-full px-3 py-2.5 pr-10 border ${formErrors.password ? 'border-red-500' : 'border-ocean-light/20'} rounded-xl text-sm focus:outline-none focus:border-ocean-light focus:ring-2 focus:ring-ocean-light/20 transition-all duration-300`}
-                    />
-                    <button
-                      type="button"
-                      onClick={togglePasswordVisibility}
-                      className="absolute right-3 top-1/2 -translate-y-1/2 text-neutral hover:text-ocean-light transition-colors"
-                    >
-                      <i className={`fas ${showPassword ? 'fa-eye' : 'fa-eye-slash'}`}></i>
-                    </button>
-                  </div>
-                  {formErrors.password && <p className="text-red-500 text-xs mt-1">{formErrors.password}</p>}
-                </div>
+{/* Password */}
+<div className="mb-4">
+  <label className="block mb-1.5 text-sm font-medium text-textPrimary">Password *</label>
+  <div className="relative">
+    <input
+      type={showPassword ? 'text' : 'password'}
+      name="password"
+      value={formData.password}
+      onChange={handleInputChange}
+      autoComplete="new-password"
+      className={`w-full px-3 py-2.5 pr-10 border ${formErrors.password ? 'border-red-500' : 'border-ocean-light/20'} rounded-xl text-sm focus:outline-none focus:border-ocean-light focus:ring-2 focus:ring-ocean-light/20 transition-all duration-300`}
+    />
+    <button
+      type="button"
+      onClick={togglePasswordVisibility}
+      className="absolute right-3 top-1/2 -translate-y-1/2 text-neutral hover:text-ocean-light transition-colors"
+    >
+      <i className={`fas ${showPassword ? 'fa-eye' : 'fa-eye-slash'}`}></i>
+    </button>
+  </div>
+  {formErrors.password && <p className="text-red-500 text-xs mt-1">{formErrors.password}</p>}
+</div>
 
-                {/* Confirm Password */}
-                <div className="mb-4">
-                  <label className="block mb-1.5 text-sm font-medium text-textPrimary">Confirm Password *</label>
-                  <div className="relative">
-                    <input
-                      type={showConfirmPassword ? 'text' : 'password'}
-                      name="confirmPassword"
-                      value={formData.confirmPassword}
-                      onChange={handleInputChange}
-                      className={`w-full px-3 py-2.5 pr-10 border ${formErrors.confirmPassword ? 'border-red-500' : 'border-ocean-light/20'} rounded-xl text-sm focus:outline-none focus:border-ocean-light focus:ring-2 focus:ring-ocean-light/20 transition-all duration-300`}
-                    />
-                    <button
-                      type="button"
-                      onClick={toggleConfirmPasswordVisibility}
-                      className="absolute right-3 top-1/2 -translate-y-1/2 text-neutral hover:text-ocean-light transition-colors"
-                    >
-                      <i className={`fas ${showConfirmPassword ? 'fa-eye' : 'fa-eye-slash'}`}></i>
-                    </button>
-                  </div>
-                  {formErrors.confirmPassword && <p className="text-red-500 text-xs mt-1">{formErrors.confirmPassword}</p>}
-                </div>
+{/* Confirm Password */}
+<div className="mb-4">
+  <label className="block mb-1.5 text-sm font-medium text-textPrimary">Confirm Password *</label>
+  <div className="relative">
+    <input
+      type={showConfirmPassword ? 'text' : 'password'}
+      name="confirmPassword"
+      value={formData.confirmPassword}
+      onChange={handleInputChange}
+      autoComplete="off"
+      className={`w-full px-3 py-2.5 pr-10 border ${formErrors.confirmPassword ? 'border-red-500' : 'border-ocean-light/20'} rounded-xl text-sm focus:outline-none focus:border-ocean-light focus:ring-2 focus:ring-ocean-light/20 transition-all duration-300`}
+    />
+    <button
+      type="button"
+      onClick={toggleConfirmPasswordVisibility}
+      className="absolute right-3 top-1/2 -translate-y-1/2 text-neutral hover:text-ocean-light transition-colors"
+    >
+      <i className={`fas ${showConfirmPassword ? 'fa-eye' : 'fa-eye-slash'}`}></i>
+    </button>
+  </div>
+  {formErrors.confirmPassword && <p className="text-red-500 text-xs mt-1">{formErrors.confirmPassword}</p>}
+</div>
 
                 {/* Phone */}
                 <div className="mb-4">
@@ -819,34 +836,19 @@ export default function StaffManagement() {
                   <p className="text-neutral text-xs mt-1">Exactly 11 digits, numbers only</p>
                 </div>
 
-                {/* Role and Status */}
-                <div className="grid grid-cols-2 gap-4 mb-5">
-                  <div>
-                    <label className="block mb-1.5 text-sm font-medium text-textPrimary">Role</label>
-                    <select
-                      name="role"
-                      value={formData.role}
-                      onChange={handleInputChange}
-                      className="w-full px-3 py-2.5 border border-ocean-light/20 rounded-xl text-sm focus:outline-none focus:border-ocean-light cursor-pointer bg-white"
-                    >
-                      <option value="staff">Staff</option>
-                      <option value="admin">Admin</option>
-                    </select>
-                  </div>
-
-                  <div>
-                    <label className="block mb-1.5 text-sm font-medium text-textPrimary">Status</label>
-                    <select
-                      name="status"
-                      value={formData.status}
-                      onChange={handleInputChange}
-                      className="w-full px-3 py-2.5 border border-ocean-light/20 rounded-xl text-sm focus:outline-none focus:border-ocean-light cursor-pointer bg-white"
-                    >
-                      <option value="active">Active (requires email verification)</option>
-                      <option value="inactive">Inactive</option>
-                    </select>
-                    <p className="text-neutral text-xs mt-1">Active accounts require email verification before login</p>
-                  </div>
+                {/* Role only (Status removed) */}
+                <div className="mb-5">
+                  <label className="block mb-1.5 text-sm font-medium text-textPrimary">Role</label>
+                  <select
+                    name="role"
+                    value={formData.role}
+                    onChange={handleInputChange}
+                    className="w-full px-3 py-2.5 border border-ocean-light/20 rounded-xl text-sm focus:outline-none focus:border-ocean-light cursor-pointer bg-white"
+                  >
+                    <option value="staff">Staff</option>
+                    <option value="admin">Admin</option>
+                  </select>
+                  <p className="text-neutral text-xs mt-1">Account will be created with &quot;Pending Verification&quot; status. An email will be sent to verify the address.</p>
                 </div>
 
                 {/* Form Actions - Button always visible */}
@@ -923,7 +925,7 @@ export default function StaffManagement() {
                         </span>
                         {selectedStaff?.status === 'pending_verification' && (
                           <button
-                            onClick={() => setResendModal({ show: true, email: selectedStaff.email, staffId: selectedStaff.id })}
+                            onClick={() => setResendModal({ show: true, email: selectedStaff.email, staffId: selectedStaff.id, name: selectedStaff.name })}
                             className="mt-2 text-xs text-ocean-light hover:text-ocean-mid underline"
                           >
                             Resend verification email

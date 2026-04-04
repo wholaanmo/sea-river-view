@@ -62,6 +62,7 @@ export default function AdminSidebar({ isOpen, onToggle }) {
     { path: '/dashboard/admin/reservations', icon: 'event', label: 'Reservations', materialIcon: 'event' },
     { path: '/dashboard/admin/rooms', icon: 'hotel', label: 'Rooms', materialIcon: 'hotel' },
     { path: '/dashboard/admin/day-tour', icon: 'wb_sunny', label: 'Day Tour', materialIcon: 'wb_sunny' },
+    { path: '/dashboard/admin/calendar', icon: 'calendar_month', label: 'Calendar', materialIcon: 'calendar_month' },
     { path: '/dashboard/admin/payment', icon: 'payment', label: 'Payment', materialIcon: 'payment' },
     { path: '/dashboard/admin/feedback', icon: 'feedback', label: 'Feedback', materialIcon: 'feedback' },
     { path: '/dashboard/admin/audit', icon: 'history', label: 'Audit Logs', materialIcon: 'history' },

@@ -1,11 +1,11 @@
-// app/login/page.js - Updated with proper email verification check
+// app/login/page.js
 'use client';
 
 import { useState, useEffect } from 'react';
 import Image from 'next/image';
 import { useRouter } from 'next/navigation';
 import { auth, db } from '../../lib/firebase';
-import { signInWithEmailAndPassword, sendPasswordResetEmail, sendEmailVerification } from 'firebase/auth';
+import { signInWithEmailAndPassword, sendEmailVerification } from 'firebase/auth';
 import { doc, getDoc, updateDoc } from 'firebase/firestore';
 
 export default function Login() {
@@ -259,41 +259,43 @@ export default function Login() {
         setResetError('');
     };
     
-    const handleResetPassword = async (e) => {
-        e.preventDefault();
+ const handleResetPassword = async (e) => {
+    e.preventDefault();
+    
+    if (!resetEmail) {
+        setResetError('Please enter your email address.');
+        return;
+    }
+    
+    setResetLoading(true);
+    setResetError('');
+    setResetMessage('');
+    
+    try {
+        const response = await fetch('/api/auth/forgot-password', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ email: resetEmail })
+        });
+        const data = await response.json();
         
-        if (!resetEmail) {
-            setResetError('Please enter your email address.');
-            return;
-        }
-        
-        setResetLoading(true);
-        setResetError('');
-        setResetMessage('');
-        
-        try {
-            await sendPasswordResetEmail(auth, resetEmail);
-            setResetMessage('Password reset email sent! Check your inbox.');
-            
+        if (response.ok) {
+            setResetMessage(data.message || 'Password reset email sent! Check your inbox.');
             setTimeout(() => {
                 setShowForgotModal(false);
                 setResetMessage('');
                 setResetEmail('');
             }, 3000);
-        } catch (error) {
-            console.error('Reset password error:', error);
-            
-            if (error.code === 'auth/user-not-found') {
-                setResetError('No account found with this email address.');
-            } else if (error.code === 'auth/invalid-email') {
-                setResetError('Invalid email format.');
-            } else {
-                setResetError('Failed to send reset email. Please try again.');
-            }
-        } finally {
-            setResetLoading(false);
+        } else {
+            setResetError(data.error || 'Failed to send reset email. Please try again.');
         }
-    };
+    } catch (error) {
+        console.error('Reset password error:', error);
+        setResetError('An error occurred. Please try again.');
+    } finally {
+        setResetLoading(false);
+    }
+};
 
     if (!isClient) {
         return null;
