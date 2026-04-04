@@ -22,6 +22,8 @@ export default function AdminCalendar() {
   const [notification, setNotification] = useState({ show: false, message: '', type: '' });
   const [reason, setReason] = useState('');
   const [unitsToBlock, setUnitsToBlock] = useState(1);
+  const [unitsBlockInputError, setUnitsBlockInputError] = useState('');
+  const [removeConfirm, setRemoveConfirm] = useState(null);
   const [actionLoading, setActionLoading] = useState(false);
   const [unavailableRanges, setUnavailableRanges] = useState([]);
 
@@ -132,6 +134,17 @@ export default function AdminCalendar() {
     return bookedCount + blockedUnits >= totalRoomUnits;
   };
 
+  /** Units still bookable for this room type on the given local date/hour (not consumed by bookings or admin blocks). */
+  const getAvailableUnitsForHour = (date, hour) => {
+    if (!date || totalRoomUnits <= 0) return 0;
+    const dateKey = toLocalDateKey(date);
+    const blockedUnits = getAdminBlockedUnits(dateKey, hour);
+    const d = new Date(date);
+    d.setHours(hour, 0, 0, 0);
+    const bookedCount = bookedDates[d.toDateString()]?.times?.[`${hour}:00`] || 0;
+    return Math.max(0, totalRoomUnits - bookedCount - blockedUnits);
+  };
+
   // Fetch blocked slots (ranges); per-hour value = total admin-blocked units (capped per room capacity)
   useEffect(() => {
     if (!selectedRoomId) return;
@@ -178,7 +191,11 @@ export default function AdminCalendar() {
   }, [selectedRoomId, totalRoomUnits]);
 
   useEffect(() => {
-    setUnitsToBlock((u) => Math.min(Math.max(1, u), Math.max(1, totalRoomUnits)));
+    setUnitsToBlock((u) => {
+      const n = typeof u === 'number' && Number.isFinite(u) ? u : 1;
+      const cap = Math.max(1, totalRoomUnits);
+      return Math.min(Math.max(1, n), cap);
+    });
   }, [totalRoomUnits]);
 
   const isHourAvailable = (date, hour) => {
@@ -248,6 +265,7 @@ export default function AdminCalendar() {
     setSelectedEndTime('');
     setReason('');
     setUnitsToBlock(1);
+    setUnitsBlockInputError('');
   };
 
   const handleStartTimeSelect = (timeSlot) => {
@@ -259,6 +277,7 @@ export default function AdminCalendar() {
     setSelectedEndTime('');
     setReason('');
     setUnitsToBlock(1);
+    setUnitsBlockInputError('');
   };
 
   const handleEndDateSelect = (date) => {
@@ -271,6 +290,7 @@ export default function AdminCalendar() {
     setSelectedEndTime('');
     setReason('');
     setUnitsToBlock(1);
+    setUnitsBlockInputError('');
   };
 
   const handleEndTimeSelect = (timeSlot) => {
@@ -311,6 +331,7 @@ export default function AdminCalendar() {
     setSelectedEndTime(timeSlot.display);
     setReason('');
     setUnitsToBlock(1);
+    setUnitsBlockInputError('');
   };
 
   const handleMarkUnavailable = async () => {
@@ -322,9 +343,25 @@ export default function AdminCalendar() {
       showNotification('Please provide a reason for blocking this time range', 'error');
       return;
     }
-    const nBlock = Math.min(totalRoomUnits, Math.max(1, parseInt(unitsToBlock, 10) || 0));
-    if (nBlock < 1) {
-      showNotification('Invalid number of units to block', 'error');
+    const maxBlock = getMinAvailableUnitsInSelectedRange(selectedStartTime, selectedEndTime);
+    if (maxBlock < 1) {
+      showNotification('No units are available to block in the selected time range.', 'error');
+      return;
+    }
+    const nBlock = parseInt(unitsToBlock, 10);
+    if (!Number.isFinite(nBlock) || nBlock < 1) {
+      showNotification('Enter a valid number of units to block (at least 1).', 'error');
+      return;
+    }
+    if (nBlock > maxBlock) {
+      showNotification(
+        `You cannot block more than ${maxBlock} unit(s); that is the current availability in the selected range.`,
+        'error'
+      );
+      return;
+    }
+    if (unitsBlockInputError) {
+      showNotification(unitsBlockInputError, 'error');
       return;
     }
     setActionLoading(true);
@@ -374,6 +411,7 @@ export default function AdminCalendar() {
       showNotification('Time range marked as Not Available', 'success');
       setReason('');
       setUnitsToBlock(1);
+      setUnitsBlockInputError('');
       // Reset selection
       setSelectedStartDate(null);
       setSelectedStartTime('');
@@ -400,6 +438,7 @@ export default function AdminCalendar() {
         module: 'Calendar Management',
         details: `Room: ${roomDetails?.type || selectedRoomId}, Date: ${dateKey}, Time: ${formatHour(startHour)} – ${formatHour(endHour)}`
       });
+      setRemoveConfirm(null);
       showNotification('Block removed', 'success');
     } catch (error) {
       console.error(error);
@@ -439,6 +478,40 @@ export default function AdminCalendar() {
     }
     return slots;
   })();
+
+  /** Minimum still-available units across every hour in the selected start→end range (max units blockable in one action). */
+  const getMinAvailableUnitsInSelectedRange = (startTimeDisplay, endTimeDisplay) => {
+    if (!selectedStartDate || !selectedEndDate || !startTimeDisplay || !endTimeDisplay || totalRoomUnits <= 0) {
+      return totalRoomUnits;
+    }
+    const startHour = timeSlots.find((s) => s.display === startTimeDisplay)?.hour;
+    const endHour = timeSlots.find((s) => s.display === endTimeDisplay)?.hour;
+    if (startHour === undefined || endHour === undefined) return totalRoomUnits;
+    let minAv = Infinity;
+    let d = new Date(selectedStartDate);
+    const endD = new Date(selectedEndDate);
+    while (d <= endD) {
+      const dateKey = toLocalDateKey(d);
+      const hStart = d.toDateString() === selectedStartDate.toDateString() ? startHour : 0;
+      const hEnd = d.toDateString() === endD.toDateString() ? endHour : 24;
+      for (let h = hStart; h < hEnd; h++) {
+        const blockedUnits = getAdminBlockedUnits(dateKey, h);
+        const dh = new Date(d);
+        dh.setHours(h, 0, 0, 0);
+        const bookedCount = bookedDates[dh.toDateString()]?.times?.[`${h}:00`] || 0;
+        const av = totalRoomUnits - bookedCount - blockedUnits;
+        minAv = Math.min(minAv, av);
+      }
+      d.setDate(d.getDate() + 1);
+      d.setHours(0, 0, 0, 0);
+    }
+    return minAv === Infinity ? 0 : Math.max(0, minAv);
+  };
+
+  const maxUnitsBlockableInRange =
+    selectedStartDate && selectedEndDate && selectedStartTime && selectedEndTime
+      ? getMinAvailableUnitsInSelectedRange(selectedStartTime, selectedEndTime)
+      : totalRoomUnits;
 
   const days = getDaysInMonth(currentDate);
   const monthNames = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
@@ -671,6 +744,7 @@ const getDateStatus = (date) => {
                     const bookedCount = bookedDates[d.toDateString()]?.times?.[`${slot.hour}:00`] || 0;
                     const noUnitsLeft = bookedCount + blockedUnits >= totalRoomUnits;
                     const fullyBookedByGuests = isHourFullyBooked(selectedStartDate, slot.hour);
+                    const availableUnits = getAvailableUnitsForHour(selectedStartDate, slot.hour);
                     let btnClass = 'py-2 px-3 rounded-lg text-sm font-medium transition-all duration-200 ';
                     let disabled = false;
                     if (selectedStartTime === slot.display) {
@@ -688,8 +762,8 @@ const getDateStatus = (date) => {
                     let statusText = '';
                     if (noUnitsLeft) {
                       statusText = fullyBookedByGuests && blockedUnits === 0 ? 'Fully Booked' : 'Unavailable';
-                    } else if (blockedUnits > 0) {
-                      statusText = 'Partial block';
+                    } else {
+                      statusText = `${availableUnits} unit${availableUnits !== 1 ? 's' : ''} available`;
                     }
                     return (
                       <button key={slot.value} onClick={() => !disabled && handleStartTimeSelect(slot)} disabled={disabled} className={btnClass}>
@@ -823,19 +897,68 @@ const getDateStatus = (date) => {
                       Units to mark unavailable <span className="text-red-500">*</span>
                     </label>
                     <p className="text-xs text-textSecondary mb-2">
-                      Choose how many of {totalRoomUnits} unit(s) to block for this range (remaining units stay bookable).
+                      This room type has {totalRoomUnits} unit(s) in service. Across the selected range, the tightest hour
+                      still has <strong>{maxUnitsBlockableInRange}</strong> unit{maxUnitsBlockableInRange !== 1 ? 's' : ''}{' '}
+                      available to block (after bookings and existing blocks).
                     </p>
-                    <select
-                      value={Math.min(Math.max(1, unitsToBlock), totalRoomUnits)}
-                      onChange={(e) => setUnitsToBlock(parseInt(e.target.value, 10) || 1)}
-                      className="w-full px-3 py-2 border border-ocean-light/20 rounded-xl text-sm focus:outline-none focus:border-ocean-light mb-4 bg-white"
-                    >
-                      {Array.from({ length: totalRoomUnits }, (_, i) => i + 1).map((n) => (
-                        <option key={n} value={n}>
-                          {n} unit{n !== 1 ? 's' : ''}
-                        </option>
-                      ))}
-                    </select>
+                    {maxUnitsBlockableInRange < 1 ? (
+                      <p className="text-sm text-red-600 mb-4">
+                        No units remain available to block in this range. Choose a different time range or remove an
+                        existing block.
+                      </p>
+                    ) : (
+                      <>
+                        <input
+                          type="number"
+                          min={1}
+                          max={maxUnitsBlockableInRange}
+                          value={unitsToBlock}
+                          onChange={(e) => {
+                            const raw = e.target.value;
+                            if (raw === '') {
+                              setUnitsToBlock('');
+                              setUnitsBlockInputError('');
+                              return;
+                            }
+                            const v = parseInt(raw, 10);
+                            if (Number.isNaN(v)) return;
+                            setUnitsToBlock(v);
+                            if (v > maxUnitsBlockableInRange) {
+                              setUnitsBlockInputError(
+                                `You cannot block more than ${maxUnitsBlockableInRange} unit(s); that is the current availability in the selected range.`
+                              );
+                            } else if (v < 1) {
+                              setUnitsBlockInputError('Enter at least 1 unit.');
+                            } else {
+                              setUnitsBlockInputError('');
+                            }
+                          }}
+                          onBlur={() => {
+                            if (unitsToBlock === '' || !Number.isFinite(unitsToBlock)) {
+                              setUnitsToBlock(1);
+                              setUnitsBlockInputError('');
+                              return;
+                            }
+                            const clamped = Math.min(
+                              Math.max(1, unitsToBlock),
+                              maxUnitsBlockableInRange
+                            );
+                            if (clamped !== unitsToBlock) {
+                              setUnitsToBlock(clamped);
+                            }
+                            setUnitsBlockInputError('');
+                          }}
+                          className={`w-full px-3 py-2 border rounded-xl text-sm focus:outline-none focus:border-ocean-light bg-white ${
+                            unitsBlockInputError ? 'border-red-400 mb-1' : 'border-ocean-light/20 mb-4'
+                          }`}
+                        />
+                        {unitsBlockInputError && (
+                          <p className="text-xs text-red-600 mb-4" role="alert">
+                            {unitsBlockInputError}
+                          </p>
+                        )}
+                      </>
+                    )}
                   </>
                 )}
                 <label className="block text-sm font-medium text-textPrimary mb-2">
@@ -850,14 +973,29 @@ const getDateStatus = (date) => {
                 />
                 <button
                   onClick={handleMarkUnavailable}
-                  disabled={actionLoading || !reason.trim() || totalRoomUnits < 1}
+                  disabled={
+                    actionLoading ||
+                    !reason.trim() ||
+                    totalRoomUnits < 1 ||
+                    maxUnitsBlockableInRange < 1 ||
+                    unitsToBlock === '' ||
+                    !Number.isFinite(unitsToBlock) ||
+                    unitsToBlock < 1 ||
+                    unitsToBlock > maxUnitsBlockableInRange ||
+                    !!unitsBlockInputError
+                  }
                   className="w-full py-2.5 bg-orange-600 hover:bg-orange-700 text-white rounded-xl font-medium transition-all duration-200 disabled:opacity-50"
                 >
                   {actionLoading ? <i className="fas fa-spinner fa-spin mr-2"></i> : <i className="fas fa-ban mr-2"></i>}
                   Mark as Not Available
                 </button>
                 <button
-                  onClick={() => { setSelectedEndDate(null); setSelectedEndTime(''); setReason(''); }}
+                  onClick={() => {
+                    setSelectedEndDate(null);
+                    setSelectedEndTime('');
+                    setReason('');
+                    setUnitsBlockInputError('');
+                  }}
                   className="w-full mt-3 py-2 border border-ocean-light/20 rounded-xl text-textSecondary text-sm hover:bg-ocean-ice transition"
                 >
                   Change End Date/Time
@@ -902,7 +1040,15 @@ const getDateStatus = (date) => {
                         </p>
                       </div>
                       <button
-                        onClick={() => handleRemoveBlock(range.id, range.date, range.startHour, range.endHour)}
+                        type="button"
+                        onClick={() =>
+                          setRemoveConfirm({
+                            id: range.id,
+                            dateKey: range.date,
+                            startHour: range.startHour,
+                            endHour: range.endHour
+                          })
+                        }
                         disabled={actionLoading}
                         className="ml-2 px-3 py-1 bg-red-500 hover:bg-red-600 text-white rounded-lg text-xs font-medium transition-all duration-200 disabled:opacity-50 flex items-center gap-1"
                       >
@@ -916,6 +1062,55 @@ const getDateStatus = (date) => {
           </div>
         </div>
       </div>
+
+      {removeConfirm && (
+        <div
+          className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/50"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="remove-block-title"
+        >
+          <div className="bg-white rounded-2xl shadow-xl max-w-md w-full p-6 border border-ocean-light/10">
+            <h4 id="remove-block-title" className="text-lg font-bold text-textPrimary mb-2">
+              Remove unavailable range?
+            </h4>
+            <p className="text-sm text-textSecondary mb-1">
+              {formatDateDisplay(removeConfirm.dateKey)}
+            </p>
+            <p className="text-sm text-textSecondary mb-4">
+              {formatHour(removeConfirm.startHour)} – {formatHour(removeConfirm.endHour)}
+            </p>
+            <p className="text-sm text-textPrimary mb-6">
+              This will restore availability for this time range. This action cannot be undone from the calendar.
+            </p>
+            <div className="flex gap-3 justify-end">
+              <button
+                type="button"
+                onClick={() => setRemoveConfirm(null)}
+                disabled={actionLoading}
+                className="px-4 py-2 rounded-xl border border-ocean-light/20 text-textSecondary text-sm font-medium hover:bg-ocean-ice transition disabled:opacity-50"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={() =>
+                  handleRemoveBlock(
+                    removeConfirm.id,
+                    removeConfirm.dateKey,
+                    removeConfirm.startHour,
+                    removeConfirm.endHour
+                  )
+                }
+                disabled={actionLoading}
+                className="px-4 py-2 rounded-xl bg-red-600 hover:bg-red-700 text-white text-sm font-medium transition disabled:opacity-50"
+              >
+                {actionLoading ? <i className="fas fa-spinner fa-spin"></i> : 'Remove'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       <style jsx>{`
         @keyframes slideInRight {
