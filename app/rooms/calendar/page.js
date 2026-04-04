@@ -22,7 +22,7 @@ export default function RoomCalendar() {
   const [selectedTime, setSelectedTime] = useState('');
   const [loading, setLoading] = useState(true);
   const [bookedDates, setBookedDates] = useState({});
-  const [blockedSlots, setBlockedSlots] = useState({}); // { dateKey: { hour: true } }
+  const [blockedSlots, setBlockedSlots] = useState({}); // { dateKey: { hour: blockedUnitCount } }
   const [fullyBlockedDates, setFullyBlockedDates] = useState({}); // { dateKey: true }
   const [roomDetails, setRoomDetails] = useState(null);
   const [timeSelectionError, setTimeSelectionError] = useState('');
@@ -71,6 +71,15 @@ export default function RoomCalendar() {
     if (typeof value.toDate === 'function') return value.toDate();
     const d = new Date(value);
     return Number.isNaN(d.getTime()) ? null : d;
+  };
+
+  /** Calendar day key in local timezone (matches admin calendar / Firestore date strings). */
+  const toLocalDateKey = (d) => {
+    if (!d) return '';
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    return `${y}-${m}-${day}`;
   };
 
   useEffect(() => {
@@ -138,48 +147,54 @@ export default function RoomCalendar() {
     return () => unsubscribe();
   }, [roomId]);
 
-  // Blocked slots listener (supports time ranges)
+  // Blocked slots: per-hour total admin-blocked units (partial blocks supported)
   useEffect(() => {
     if (!roomId) return;
+    const cap = totalRoomUnits;
     const blockedRef = collection(db, 'unavailableSlots');
     const q = query(blockedRef, where('roomId', '==', roomId));
     const unsubscribe = onSnapshot(q, (snapshot) => {
-      const blocks = {}; // { dateKey: { hour: true } }
-      const fullyBlocked = {}; // { dateKey: true }
-      
-      snapshot.forEach(doc => {
-        const data = doc.data();
+      const blocks = {}; // { dateKey: { hour: number } }
+      const fullyBlocked = {}; // { dateKey: true } — all hours have blockedUnits >= cap
+
+      snapshot.forEach((docSnap) => {
+        const data = docSnap.data();
         const dateKey = data.date;
         const startHour = data.startHour;
         const endHour = data.endHour;
-        
+        const rawUnits = data.unitsBlocked;
+        const docUnits =
+          rawUnits != null
+            ? Math.min(cap, Math.max(1, parseInt(rawUnits, 10) || 0))
+            : cap;
+
         if (!blocks[dateKey]) blocks[dateKey] = {};
-        
-        // Mark every hour in the range as blocked
         for (let hour = startHour; hour < endHour; hour++) {
-          blocks[dateKey][hour] = true;
+          const prev = blocks[dateKey][hour] || 0;
+          blocks[dateKey][hour] = Math.min(cap, prev + docUnits);
         }
       });
-      
-      // Check which dates have all 24 hours blocked
-      Object.keys(blocks).forEach(dateKey => {
-        let allHoursBlocked = true;
-        for (let hour = 0; hour < 24; hour++) {
-          if (!blocks[dateKey][hour]) {
-            allHoursBlocked = false;
-            break;
+
+      if (cap > 0) {
+        Object.keys(blocks).forEach((dateKey) => {
+          let allHoursBlocked = true;
+          for (let hour = 0; hour < 24; hour++) {
+            if ((blocks[dateKey][hour] || 0) < cap) {
+              allHoursBlocked = false;
+              break;
+            }
           }
-        }
-        if (allHoursBlocked) {
-          fullyBlocked[dateKey] = true;
-        }
-      });
-      
+          if (allHoursBlocked) {
+            fullyBlocked[dateKey] = true;
+          }
+        });
+      }
+
       setBlockedSlots(blocks);
       setFullyBlockedDates(fullyBlocked);
     });
     return () => unsubscribe();
-  }, [roomId]);
+  }, [roomId, totalRoomUnits]);
 
   useEffect(() => {
     if (!selectedDate || !selectedTime) return;
@@ -192,7 +207,7 @@ export default function RoomCalendar() {
     if (!canFitRequiredBookingDuration(selectedDate, hours)) {
       setSelectedTime('');
     }
-  }, [bookedDates, selectedDate, selectedTime, totalRoomUnits]);
+  }, [bookedDates, blockedSlots, selectedDate, selectedTime, totalRoomUnits]);
 
   const getDaysInMonth = (date) => {
     const year = date.getFullYear();
@@ -209,23 +224,19 @@ export default function RoomCalendar() {
 
   const BOOKING_DURATION_HOURS = 22;
 
-const isHourAvailable = (date, hour) => {
-  if (!date) return false;
-  if (totalRoomUnits <= 0) return false;
-  const dateKey = date.toISOString().split('T')[0];
-  
-  // Get blocked units for this hour
-  const blockedUnits = blockedSlots[dateKey]?.[hour]?.blockedUnits || 0;
-  
-  const d = new Date(date);
-  d.setHours(hour, 0, 0, 0);
-  const bookingDateKey = d.toDateString();
-  const bookedCount = bookedDates[bookingDateKey]?.times?.[`${hour}:00`] || 0;
-  
-  // Available units = total - booked - blocked
-  const availableUnits = totalRoomUnits - bookedCount - blockedUnits;
-  return availableUnits > 0;
-};
+  const isHourAvailable = (date, hour) => {
+    if (!date) return false;
+    if (totalRoomUnits <= 0) return false;
+    const dateKey = toLocalDateKey(date);
+    const blockedUnits = blockedSlots[dateKey]?.[hour] ?? 0;
+
+    const d = new Date(date);
+    d.setHours(hour, 0, 0, 0);
+    const bookingDateKey = d.toDateString();
+    const bookedCount = bookedDates[bookingDateKey]?.times?.[`${hour}:00`] || 0;
+
+    return totalRoomUnits - bookedCount - blockedUnits > 0;
+  };
 
   const canFitRequiredBookingDuration = (date, startHour) => {
     if (!date) return false;
@@ -233,12 +244,12 @@ const isHourAvailable = (date, hour) => {
     for (let offset = 0; offset < BOOKING_DURATION_HOURS; offset++) {
       const d = new Date(date);
       d.setHours(startHour + offset, 0, 0, 0);
-      const dateKey = d.toISOString().split('T')[0];
+      const dateKey = toLocalDateKey(d);
       const hour = d.getHours();
-      if (blockedSlots[dateKey] && blockedSlots[dateKey][hour]) return false;
+      const blockedUnits = blockedSlots[dateKey]?.[hour] ?? 0;
       const bookingDateKey = d.toDateString();
       const bookedCount = bookedDates[bookingDateKey]?.times?.[`${hour}:00`] || 0;
-      if (bookedCount >= totalRoomUnits) return false;
+      if (bookedCount + blockedUnits >= totalRoomUnits) return false;
     }
     return true;
   };
@@ -284,13 +295,18 @@ const isHourAvailable = (date, hour) => {
 
   const hasAnyBlockedSlot = (date) => {
     if (!date) return false;
-    const dateKey = date.toISOString().split('T')[0];
-    return blockedSlots[dateKey] && Object.keys(blockedSlots[dateKey]).length > 0;
+    const dateKey = toLocalDateKey(date);
+    const day = blockedSlots[dateKey];
+    if (!day) return false;
+    for (let h = 0; h < 24; h++) {
+      if ((day[h] || 0) > 0) return true;
+    }
+    return false;
   };
 
   const isDateFullyBlockedByAdmin = (date) => {
     if (!date) return false;
-    const dateKey = date.toISOString().split('T')[0];
+    const dateKey = toLocalDateKey(date);
     return fullyBlockedDates[dateKey] === true;
   };
 
@@ -614,10 +630,13 @@ const isHourAvailable = (date, hour) => {
                     )}
                     <div className="grid grid-cols-2 gap-2 max-h-[400px] overflow-y-auto">
                       {timeSlots.map((slot) => {
-                        const dateKey = selectedDate.toISOString().split('T')[0];
-                        const isBlocked = !!blockedSlots[dateKey]?.[slot.hour];
-                        const isAvailable = !isBlocked && isHourAvailable(selectedDate, slot.hour);
-                        const isFullyBookedSlot = !isBlocked && !isHourAvailable(selectedDate, slot.hour);
+                        const dateKey = toLocalDateKey(selectedDate);
+                        const blockedUnits = blockedSlots[dateKey]?.[slot.hour] ?? 0;
+                        const d = new Date(selectedDate);
+                        d.setHours(slot.hour, 0, 0, 0);
+                        const bookedCount = bookedDates[d.toDateString()]?.times?.[`${slot.hour}:00`] || 0;
+                        const isAvailable = isHourAvailable(selectedDate, slot.hour);
+                        const fullyBookedByGuests = bookedCount >= totalRoomUnits;
                         return (
                           <button
                             type="button"
@@ -633,11 +652,11 @@ const isHourAvailable = (date, hour) => {
                             }`}
                           >
                             {slot.display}
-                            {!isAvailable && isBlocked && (
-                              <span className="block text-[10px] text-orange-600 mt-0.5">Not Available</span>
-                            )}
-                            {!isAvailable && !isBlocked && isFullyBookedSlot && (
+                            {!isAvailable && fullyBookedByGuests && blockedUnits === 0 && (
                               <span className="block text-[10px] text-red-500 mt-0.5">Fully Booked</span>
+                            )}
+                            {!isAvailable && (blockedUnits > 0 || !fullyBookedByGuests) && (
+                              <span className="block text-[10px] text-orange-600 mt-0.5">Not Available</span>
                             )}
                           </button>
                         );

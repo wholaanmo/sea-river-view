@@ -21,6 +21,7 @@ export default function AdminCalendar() {
   const [loading, setLoading] = useState(true);
   const [notification, setNotification] = useState({ show: false, message: '', type: '' });
   const [reason, setReason] = useState('');
+  const [unitsToBlock, setUnitsToBlock] = useState(1);
   const [actionLoading, setActionLoading] = useState(false);
   const [unavailableRanges, setUnavailableRanges] = useState([]);
 
@@ -91,31 +92,78 @@ export default function AdminCalendar() {
     return () => unsubscribe();
   }, [selectedRoomId]);
 
-  // Fetch blocked slots (ranges)
+  const toJsDate = (value) => {
+    if (!value) return null;
+    if (value instanceof Date) return isNaN(value.getTime()) ? null : value;
+    if (typeof value.toDate === 'function') return value.toDate();
+    const d = new Date(value);
+    return isNaN(d.getTime()) ? null : d;
+  };
+
+  /** Calendar day key in local timezone (avoids UTC off-by-one vs grid dates). */
+  const toLocalDateKey = (d) => {
+    if (!d) return '';
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    return `${y}-${m}-${day}`;
+  };
+
+  const totalRoomUnits = (() => {
+    if (!roomDetails) return 1;
+    const total = parseInt(roomDetails.totalRooms) || 1;
+    const maintenance = parseInt(roomDetails.maintenanceRooms) || 0;
+    return Math.max(0, total - maintenance);
+  })();
+
+  const getAdminBlockedUnits = (dateKey, hour) => {
+    const n = blockedSlots[dateKey]?.[hour];
+    return typeof n === 'number' ? n : 0;
+  };
+
+  const hourHasNoUnitsLeft = (date, hour) => {
+    if (!date || totalRoomUnits <= 0) return true;
+    const dateKey = toLocalDateKey(date);
+    const blockedUnits = getAdminBlockedUnits(dateKey, hour);
+    const d = new Date(date);
+    d.setHours(hour, 0, 0, 0);
+    const bookingDateKey = d.toDateString();
+    const bookedCount = bookedDates[bookingDateKey]?.times?.[`${hour}:00`] || 0;
+    return bookedCount + blockedUnits >= totalRoomUnits;
+  };
+
+  // Fetch blocked slots (ranges); per-hour value = total admin-blocked units (capped per room capacity)
   useEffect(() => {
     if (!selectedRoomId) return;
+    const cap = totalRoomUnits;
     const blockedRef = collection(db, 'unavailableSlots');
     const q = query(blockedRef, where('roomId', '==', selectedRoomId));
     const unsubscribe = onSnapshot(q, (snapshot) => {
       const blocks = {};
       const ranges = [];
-      snapshot.forEach(doc => {
-        const data = doc.data();
+      snapshot.forEach(docSnap => {
+        const data = docSnap.data();
         const dateKey = data.date;
         const startHour = data.startHour;
         const endHour = data.endHour;
-        const reason = data.reason;
+        const reasonText = data.reason;
+        const rawUnits = data.unitsBlocked;
+        const docUnits =
+          rawUnits != null
+            ? Math.min(cap, Math.max(1, parseInt(rawUnits, 10) || 0))
+            : cap;
         if (!blocks[dateKey]) blocks[dateKey] = {};
-        // Mark each hour in range as blocked
         for (let hour = startHour; hour < endHour; hour++) {
-          blocks[dateKey][hour] = true;
+          const prev = blocks[dateKey][hour] || 0;
+          blocks[dateKey][hour] = Math.min(cap, prev + docUnits);
         }
         ranges.push({
-          id: doc.id,
+          id: docSnap.id,
           date: dateKey,
-          startHour: startHour,
-          endHour: endHour,
-          reason: reason,
+          startHour,
+          endHour,
+          reason: reasonText,
+          unitsBlocked: rawUnits != null ? docUnits : null,
           createdAt: data.createdAt
         });
       });
@@ -127,35 +175,18 @@ export default function AdminCalendar() {
       }));
     });
     return () => unsubscribe();
-  }, [selectedRoomId]);
+  }, [selectedRoomId, totalRoomUnits]);
 
-  const toJsDate = (value) => {
-    if (!value) return null;
-    if (value instanceof Date) return isNaN(value.getTime()) ? null : value;
-    if (typeof value.toDate === 'function') return value.toDate();
-    const d = new Date(value);
-    return isNaN(d.getTime()) ? null : d;
-  };
-
-  const totalRoomUnits = (() => {
-    if (!roomDetails) return 1;
-    const total = parseInt(roomDetails.totalRooms) || 1;
-    const maintenance = parseInt(roomDetails.maintenanceRooms) || 0;
-    return Math.max(0, total - maintenance);
-  })();
+  useEffect(() => {
+    setUnitsToBlock((u) => Math.min(Math.max(1, u), Math.max(1, totalRoomUnits)));
+  }, [totalRoomUnits]);
 
   const isHourAvailable = (date, hour) => {
     if (!date || totalRoomUnits <= 0) return false;
     const today = new Date();
     today.setHours(0, 0, 0, 0);
     if (date < today) return false;
-    const dateKey = date.toISOString().split('T')[0];
-    if (blockedSlots[dateKey] && blockedSlots[dateKey][hour]) return false;
-    const d = new Date(date);
-    d.setHours(hour, 0, 0, 0);
-    const bookingDateKey = d.toDateString();
-    const bookedCount = bookedDates[bookingDateKey]?.times?.[`${hour}:00`] || 0;
-    return bookedCount < totalRoomUnits;
+    return !hourHasNoUnitsLeft(date, hour);
   };
 
   const isHourFullyBooked = (date, hour) => {
@@ -187,8 +218,13 @@ export default function AdminCalendar() {
 
   const hasAnyBlockedSlot = (date) => {
     if (!date) return false;
-    const dateKey = date.toISOString().split('T')[0];
-    return blockedSlots[dateKey] && Object.keys(blockedSlots[dateKey]).length > 0;
+    const dateKey = toLocalDateKey(date);
+    const day = blockedSlots[dateKey];
+    if (!day) return false;
+    for (let h = 0; h < 24; h++) {
+      if ((day[h] || 0) > 0) return true;
+    }
+    return false;
   };
 
   const getDaysInMonth = (date) => {
@@ -211,18 +247,18 @@ export default function AdminCalendar() {
     setSelectedEndDate(null);
     setSelectedEndTime('');
     setReason('');
+    setUnitsToBlock(1);
   };
 
   const handleStartTimeSelect = (timeSlot) => {
     if (!selectedStartDate) return;
     const hour = timeSlot.hour;
-    const isBlocked = !!blockedSlots[selectedStartDate.toISOString().split('T')[0]]?.[hour];
-    const isFullyBooked = isHourFullyBooked(selectedStartDate, hour);
-    if (isBlocked || isFullyBooked) return;
+    if (hourHasNoUnitsLeft(selectedStartDate, hour)) return;
     setSelectedStartTime(timeSlot.display);
     setSelectedEndDate(null);
     setSelectedEndTime('');
     setReason('');
+    setUnitsToBlock(1);
   };
 
   const handleEndDateSelect = (date) => {
@@ -234,6 +270,7 @@ export default function AdminCalendar() {
     setSelectedEndDate(date);
     setSelectedEndTime('');
     setReason('');
+    setUnitsToBlock(1);
   };
 
   const handleEndTimeSelect = (timeSlot) => {
@@ -250,15 +287,16 @@ export default function AdminCalendar() {
     let currentDate = new Date(selectedStartDate);
     const endDateObj = new Date(selectedEndDate);
     while (currentDate <= endDateObj && !hasConflict) {
-      const dateKey = currentDate.toISOString().split('T')[0];
+      const dateKey = toLocalDateKey(currentDate);
       let hourStart = (currentDate.toDateString() === selectedStartDate.toDateString()) ? startHour : 0;
       let hourEnd = (currentDate.toDateString() === endDateObj.toDateString()) ? endHour : 24;
       for (let hour = hourStart; hour < hourEnd; hour++) {
-        if (blockedSlots[dateKey] && blockedSlots[dateKey][hour]) {
-          hasConflict = true;
-          break;
-        }
-        if (isHourFullyBooked(currentDate, hour)) {
+        const blockedUnits = getAdminBlockedUnits(dateKey, hour);
+        const d = new Date(currentDate);
+        d.setHours(hour, 0, 0, 0);
+        const bookingDateKey = d.toDateString();
+        const bookedCount = bookedDates[bookingDateKey]?.times?.[`${hour}:00`] || 0;
+        if (bookedCount + blockedUnits + 1 > totalRoomUnits) {
           hasConflict = true;
           break;
         }
@@ -272,6 +310,7 @@ export default function AdminCalendar() {
     }
     setSelectedEndTime(timeSlot.display);
     setReason('');
+    setUnitsToBlock(1);
   };
 
   const handleMarkUnavailable = async () => {
@@ -281,6 +320,11 @@ export default function AdminCalendar() {
     }
     if (!reason.trim()) {
       showNotification('Please provide a reason for blocking this time range', 'error');
+      return;
+    }
+    const nBlock = Math.min(totalRoomUnits, Math.max(1, parseInt(unitsToBlock, 10) || 0));
+    if (nBlock < 1) {
+      showNotification('Invalid number of units to block', 'error');
       return;
     }
     setActionLoading(true);
@@ -293,17 +337,28 @@ export default function AdminCalendar() {
       let currentDate = new Date(selectedStartDate);
       const endDateObj = new Date(selectedEndDate);
       while (currentDate <= endDateObj) {
-        const dateKey = currentDate.toISOString().split('T')[0];
+        const dateKey = toLocalDateKey(currentDate);
         let hourStart = (currentDate.toDateString() === selectedStartDate.toDateString()) ? startHour : 0;
         let hourEnd = (currentDate.toDateString() === endDateObj.toDateString()) ? endHour : 24;
         // Skip if start hour >= end hour (should not happen)
         if (hourStart < hourEnd) {
+          for (let hour = hourStart; hour < hourEnd; hour++) {
+            const blockedUnits = getAdminBlockedUnits(dateKey, hour);
+            const d = new Date(currentDate);
+            d.setHours(hour, 0, 0, 0);
+            const bookingDateKey = d.toDateString();
+            const bookedCount = bookedDates[bookingDateKey]?.times?.[`${hour}:00`] || 0;
+            if (bookedCount + blockedUnits + nBlock > totalRoomUnits) {
+              throw new Error('RANGE_OVERCAP');
+            }
+          }
           await addDoc(collection(db, 'unavailableSlots'), {
             roomId: selectedRoomId,
             date: dateKey,
             startHour: hourStart,
             endHour: hourEnd,
             reason: reason.trim(),
+            unitsBlocked: nBlock,
             createdAt: new Date().toISOString(),
             updatedAt: new Date().toISOString()
           });
@@ -314,10 +369,11 @@ export default function AdminCalendar() {
       await logAdminAction({
         action: 'Marked Time Range Unavailable',
         module: 'Calendar Management',
-        details: `Room: ${roomDetails?.type || selectedRoomId}, Range: ${selectedStartDate.toDateString()} ${selectedStartTime} – ${selectedEndDate.toDateString()} ${selectedEndTime}, Reason: ${reason}`
+        details: `Room: ${roomDetails?.type || selectedRoomId}, Range: ${selectedStartDate.toDateString()} ${selectedStartTime} – ${selectedEndDate.toDateString()} ${selectedEndTime}, Units: ${nBlock}, Reason: ${reason}`
       });
       showNotification('Time range marked as Not Available', 'success');
       setReason('');
+      setUnitsToBlock(1);
       // Reset selection
       setSelectedStartDate(null);
       setSelectedStartTime('');
@@ -325,7 +381,11 @@ export default function AdminCalendar() {
       setSelectedEndTime('');
     } catch (error) {
       console.error(error);
-      showNotification('Failed to mark time range', 'error');
+      if (error?.message === 'RANGE_OVERCAP') {
+        showNotification('Not enough units left in that range for the selected block count (bookings or existing blocks)', 'error');
+      } else {
+        showNotification('Failed to mark time range', 'error');
+      }
     } finally {
       setActionLoading(false);
     }
@@ -389,6 +449,7 @@ export default function AdminCalendar() {
     setSelectedStartTime('');
     setSelectedEndDate(null);
     setSelectedEndTime('');
+    setUnitsToBlock(1);
   };
   const goToNextMonth = () => {
     setCurrentDate(new Date(currentDate.getFullYear(), currentDate.getMonth() + 1, 1));
@@ -396,19 +457,19 @@ export default function AdminCalendar() {
     setSelectedStartTime('');
     setSelectedEndDate(null);
     setSelectedEndTime('');
+    setUnitsToBlock(1);
   };
 
   const isDateFullyBlocked = (date) => {
-  if (!date) return false;
-  const dateKey = date.toISOString().split('T')[0];
-  const blocks = blockedSlots[dateKey];
-  if (!blocks) return false;
-  // Check if all 24 hours are blocked
-  for (let hour = 0; hour < 24; hour++) {
-    if (!blocks[hour]) return false;
-  }
-  return true;
-};
+    if (!date || totalRoomUnits <= 0) return false;
+    const dateKey = toLocalDateKey(date);
+    const day = blockedSlots[dateKey];
+    if (!day) return false;
+    for (let hour = 0; hour < 24; hour++) {
+      if ((day[hour] || 0) < totalRoomUnits) return false;
+    }
+    return true;
+  };
 
 const getDateStatus = (date) => {
   if (isDatePast(date)) return 'past';
@@ -464,6 +525,7 @@ const getDateStatus = (date) => {
                 setSelectedStartTime('');
                 setSelectedEndDate(null);
                 setSelectedEndTime('');
+                setUnitsToBlock(1);
               }}
               className="px-4 py-2 border border-ocean-light/20 rounded-xl text-sm focus:outline-none focus:border-ocean-light bg-white"
             >
@@ -528,7 +590,7 @@ const getDateStatus = (date) => {
     cursorClass = 'cursor-not-allowed';
     titleText = 'Fully Booked';
     break;
-  case 'hasBlocked':;
+  case 'hasBlocked':
     textColor = 'text-orange-700';
     cursorClass = 'cursor-pointer';
     titleText = 'Some hours blocked';
@@ -602,24 +664,33 @@ const getDateStatus = (date) => {
                 <label className="block text-sm font-medium text-textPrimary mb-2">Select Start Time</label>
                 <div className="grid grid-cols-3 gap-2 max-h-64 overflow-y-auto mb-4">
                   {timeSlots.map(slot => {
-                    const isBlocked = !!blockedSlots[selectedStartDate.toISOString().split('T')[0]]?.[slot.hour];
-                    const isFullyBooked = isHourFullyBooked(selectedStartDate, slot.hour);
+                    const dateKey = toLocalDateKey(selectedStartDate);
+                    const blockedUnits = getAdminBlockedUnits(dateKey, slot.hour);
+                    const d = new Date(selectedStartDate);
+                    d.setHours(slot.hour, 0, 0, 0);
+                    const bookedCount = bookedDates[d.toDateString()]?.times?.[`${slot.hour}:00`] || 0;
+                    const noUnitsLeft = bookedCount + blockedUnits >= totalRoomUnits;
+                    const fullyBookedByGuests = isHourFullyBooked(selectedStartDate, slot.hour);
                     let btnClass = 'py-2 px-3 rounded-lg text-sm font-medium transition-all duration-200 ';
                     let disabled = false;
                     if (selectedStartTime === slot.display) {
                       btnClass += 'bg-ocean-mid text-white';
-                    } else if (isBlocked) {
-                      btnClass += 'bg-orange-100 text-orange-700 border border-orange-200';
+                    } else if (noUnitsLeft) {
+                      btnClass += fullyBookedByGuests && blockedUnits === 0
+                        ? 'bg-red-100 text-red-700 border border-red-200'
+                        : 'bg-orange-100 text-orange-700 border border-orange-200';
                       disabled = true;
-                    } else if (isFullyBooked) {
-                      btnClass += 'bg-red-100 text-red-700 border border-red-200';
-                      disabled = true;
+                    } else if (blockedUnits > 0) {
+                      btnClass += 'bg-amber-50 text-amber-800 border border-amber-200 hover:bg-amber-100';
                     } else {
                       btnClass += 'bg-ocean-ice text-textPrimary hover:bg-ocean-light/20';
                     }
                     let statusText = '';
-                    if (isBlocked) statusText = 'Unavailable';
-                    if (isFullyBooked) statusText = 'Fully Booked';
+                    if (noUnitsLeft) {
+                      statusText = fullyBookedByGuests && blockedUnits === 0 ? 'Fully Booked' : 'Unavailable';
+                    } else if (blockedUnits > 0) {
+                      statusText = 'Partial block';
+                    }
                     return (
                       <button key={slot.value} onClick={() => !disabled && handleStartTimeSelect(slot)} disabled={disabled} className={btnClass}>
                         {slot.display}
@@ -689,15 +760,15 @@ const getDateStatus = (date) => {
                       let currentDate = new Date(selectedStartDate);
                       const endDateObj = new Date(selectedEndDate);
                       while (currentDate <= endDateObj && !hasConflict) {
-                        const dateKey = currentDate.toISOString().split('T')[0];
+                        const dateKey = toLocalDateKey(currentDate);
                         let hourStart = (currentDate.toDateString() === selectedStartDate.toDateString()) ? startHour : 0;
                         let hourEnd = (currentDate.toDateString() === endDateObj.toDateString()) ? slot.hour : 24;
                         for (let hour = hourStart; hour < hourEnd; hour++) {
-                          if (blockedSlots[dateKey] && blockedSlots[dateKey][hour]) {
-                            hasConflict = true;
-                            break;
-                          }
-                          if (isHourFullyBooked(currentDate, hour)) {
+                          const blockedUnits = getAdminBlockedUnits(dateKey, hour);
+                          const dh = new Date(currentDate);
+                          dh.setHours(hour, 0, 0, 0);
+                          const bookedCount = bookedDates[dh.toDateString()]?.times?.[`${hour}:00`] || 0;
+                          if (bookedCount + blockedUnits + 1 > totalRoomUnits) {
                             hasConflict = true;
                             break;
                           }
@@ -746,6 +817,27 @@ const getDateStatus = (date) => {
                   <p className="text-md font-semibold text-textPrimary">to</p>
                   <p className="text-md font-semibold text-textPrimary">{selectedEndDate.toDateString()} {selectedEndTime}</p>
                 </div>
+                {totalRoomUnits > 0 && (
+                  <>
+                    <label className="block text-sm font-medium text-textPrimary mb-2">
+                      Units to mark unavailable <span className="text-red-500">*</span>
+                    </label>
+                    <p className="text-xs text-textSecondary mb-2">
+                      Choose how many of {totalRoomUnits} unit(s) to block for this range (remaining units stay bookable).
+                    </p>
+                    <select
+                      value={Math.min(Math.max(1, unitsToBlock), totalRoomUnits)}
+                      onChange={(e) => setUnitsToBlock(parseInt(e.target.value, 10) || 1)}
+                      className="w-full px-3 py-2 border border-ocean-light/20 rounded-xl text-sm focus:outline-none focus:border-ocean-light mb-4 bg-white"
+                    >
+                      {Array.from({ length: totalRoomUnits }, (_, i) => i + 1).map((n) => (
+                        <option key={n} value={n}>
+                          {n} unit{n !== 1 ? 's' : ''}
+                        </option>
+                      ))}
+                    </select>
+                  </>
+                )}
                 <label className="block text-sm font-medium text-textPrimary mb-2">
                   Reason for blocking <span className="text-red-500">*</span>
                 </label>
@@ -758,7 +850,7 @@ const getDateStatus = (date) => {
                 />
                 <button
                   onClick={handleMarkUnavailable}
-                  disabled={actionLoading || !reason.trim()}
+                  disabled={actionLoading || !reason.trim() || totalRoomUnits < 1}
                   className="w-full py-2.5 bg-orange-600 hover:bg-orange-700 text-white rounded-xl font-medium transition-all duration-200 disabled:opacity-50"
                 >
                   {actionLoading ? <i className="fas fa-spinner fa-spin mr-2"></i> : <i className="fas fa-ban mr-2"></i>}
@@ -796,6 +888,14 @@ const getDateStatus = (date) => {
                         </p>
                         <p className="text-xs text-orange-700 mt-0.5">
                           {formatHour(range.startHour)} – {formatHour(range.endHour)}
+                          {range.unitsBlocked != null && (
+                            <span className="block mt-1 text-orange-800">
+                              Units blocked: {range.unitsBlocked}
+                            </span>
+                          )}
+                          {range.unitsBlocked == null && (
+                            <span className="block mt-1 text-orange-800">Units blocked: all</span>
+                          )}
                         </p>
                         <p className="text-xs text-orange-600 mt-2">
                           <span className="font-medium">Reason:</span> {range.reason}
