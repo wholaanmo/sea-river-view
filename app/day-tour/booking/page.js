@@ -1,121 +1,66 @@
-// app/rooms/booking/page.js
+// app/day-tour/booking/page.js
 'use client';
 
 import { useState, useEffect } from 'react';
 import { useSearchParams, useRouter } from 'next/navigation';
 import GuestLayout from '@/app/guest/layout';
 import { db } from '@/lib/firebase';
-import { collection, addDoc, serverTimestamp, updateDoc, doc, getDoc, query, where, getDocs, onSnapshot } from 'firebase/firestore';
-import Image from 'next/image';
+import { collection, query, where, getDocs, addDoc, doc, getDoc, serverTimestamp, onSnapshot } from 'firebase/firestore';
 
-export default function BookingPage() {
+export default function DayTourBooking() {
   const searchParams = useSearchParams();
   const router = useRouter();
-  const roomId = searchParams.get('roomId');
-  const roomType = searchParams.get('roomType');
-  const price = parseFloat(searchParams.get('price'));
-  // Fix: Properly parse maxCapacity with fallback and validation
-  const maxCapacityParam = searchParams.get('maxCapacity');
-  const maxCapacity = maxCapacityParam && !isNaN(parseInt(maxCapacityParam)) ? parseInt(maxCapacityParam) : 0;
-  const totalRooms = parseInt(searchParams.get('totalRooms') || '1');
-  const checkInDateParam = searchParams.get('checkIn');
-  const [notifyingResort, setNotifyingResort] = useState(false);
-  const [bankRequestSent, setBankRequestSent] = useState(false);
-  const [requestedBankInfo, setRequestedBankInfo] = useState(null);
-  const [modalNotification, setModalNotification] = useState(null);
-  const [bankRequestId, setBankRequestId] = useState(null);
-  const [copiedMessage, setCopiedMessage] = useState(false);
-  const [generatedBookingId, setGeneratedBookingId] = useState('');
-  const [roomDetails, setRoomDetails] = useState(null);
-
-  const [step, setStep] = useState(1);
-  const [bookingData, setBookingData] = useState({
-    roomId,
-    roomType,
-    price,
-    maxCapacity,
-    totalRooms,
-    checkIn: checkInDateParam ? new Date(checkInDateParam) : null,
-    nights: 1,
-    guests: 1,
-    checkOut: null,
-    firstName: '',
-    lastName: '',
-    email: '',
-    phone: '',
-    paymentProof: null,
-    bookingId: null
-  });
-  const [errors, setErrors] = useState({});
-  const [uploading, setUploading] = useState(false);
-  const [totalPrice, setTotalPrice] = useState(price);
-  const [submitting, setSubmitting] = useState(false);
-  const [checkOutTime, setCheckOutTime] = useState('');
+  const dateParam = searchParams.get('date');
   
-  // Add availability status state at component level
-  const [availabilityStatus, setAvailabilityStatus] = useState({
-    checking: false,
-    isAvailable: true,
-    message: ''
-  });
-
-  const [paymentMethod, setPaymentMethod] = useState('gcash');
+  const [loading, setLoading] = useState(true);
+  const [dayTour, setDayTour] = useState(null);
+  const [selectedDate, setSelectedDate] = useState(null);
+  const [remainingCapacity, setRemainingCapacity] = useState(0);
+  const [step, setStep] = useState(1);
+  const [submitting, setSubmitting] = useState(false);
+  const [uploading, setUploading] = useState(false);
+  const [generatedBookingId, setGeneratedBookingId] = useState('');
   const [paymentSettings, setPaymentSettings] = useState({
     gcashQRCode: '',
     bankAccounts: []
   });
+  const [paymentMethod, setPaymentMethod] = useState('gcash');
+  const [bankRequestSent, setBankRequestSent] = useState(false);
+  const [bankRequestId, setBankRequestId] = useState(null);
   const [bankDetailsProvided, setBankDetailsProvided] = useState(null);
+  const [notifyingResort, setNotifyingResort] = useState(false);
   const [selectedBankAccount, setSelectedBankAccount] = useState(null);
   const [showBankSelection, setShowBankSelection] = useState(false);
-  const [downPaymentAmount, setDownPaymentAmount] = useState(0);
+  const [requestedBankInfo, setRequestedBankInfo] = useState(null);
+  const [modalNotification, setModalNotification] = useState(null);
+  const [copiedMessage, setCopiedMessage] = useState(false);
+  
+  const [bookingData, setBookingData] = useState({
+    adults: 1,
+    kids: 0,
+    seniors: 0,
+    firstName: '',
+    lastName: '',
+    email: '',
+    phone: '',
+    paymentProof: null
+  });
+  
+  const [errors, setErrors] = useState({});
 
   // Generate unique booking reference number
   const generateBookingReference = () => {
     const timestamp = Date.now();
-    const randomNum = Math.floor(Math.random() * 900) + 100; // 3-digit random number (100-999)
-    return `BOOK-${timestamp}-${randomNum}`;
+    const randomNum = Math.floor(Math.random() * 900) + 100;
+    return `DAYTOUR-${timestamp}-${randomNum}`;
   };
 
-  // Generate booking reference on component mount
   useEffect(() => {
     const newBookingId = generateBookingReference();
     setGeneratedBookingId(newBookingId);
-    setBookingData(prev => ({ ...prev, bookingId: newBookingId }));
   }, []);
 
-  // Copy to clipboard function
-  const copyToClipboard = async (text) => {
-    try {
-      await navigator.clipboard.writeText(text);
-      setCopiedMessage(true);
-      setTimeout(() => setCopiedMessage(false), 2000);
-    } catch (err) {
-      console.error('Failed to copy text: ', err);
-    }
-  };
-
-  // Calculate down payment (50% of total price)
-  useEffect(() => {
-    setDownPaymentAmount(totalPrice * 0.5);
-  }, [totalPrice]);
-
-  // Fetch room details
-  useEffect(() => {
-    const fetchRoomDetails = async () => {
-      if (roomId) {
-        try {
-          const roomDoc = await getDoc(doc(db, 'rooms', roomId));
-          if (roomDoc.exists()) {
-            setRoomDetails(roomDoc.data());
-          }
-        } catch (error) {
-          console.error('Error fetching room details:', error);
-        }
-      }
-    };
-    fetchRoomDetails();
-  }, [roomId]);
-
+  // Fetch payment settings
   useEffect(() => {
     const fetchPaymentSettings = async () => {
       try {
@@ -136,34 +81,15 @@ export default function BookingPage() {
     fetchPaymentSettings();
   }, []);
 
-  // Also listen for bank details provided for this booking
-  useEffect(() => {
-    if (bookingData.bookingId) {
-      const fetchBankDetails = async () => {
-        try {
-          const bookingRef = doc(db, 'bookings', bookingData.bookingId);
-          const bookingDoc = await getDoc(bookingRef);
-          if (bookingDoc.exists() && bookingDoc.data().bankDetailsProvided) {
-            setBankDetailsProvided(bookingDoc.data().bankDetailsProvided);
-          }
-        } catch (error) {
-          console.error('Error fetching bank details:', error);
-        }
-      };
-      fetchBankDetails();
-    }
-  }, [bookingData.bookingId]);
-
-  // Real-time listener for bank request document to get provided bank details from admin
+  // Real-time listener for bank request status updates
   useEffect(() => {
     if (!bankRequestId) return;
     
-    const bankRequestRef = doc(db, 'bank_requests', bankRequestId);
+    const bankRequestRef = doc(db, 'daytour_bank_requests', bankRequestId);
     
     const unsubscribe = onSnapshot(bankRequestRef, (docSnapshot) => {
       if (docSnapshot.exists()) {
         const data = docSnapshot.data();
-        // If admin has provided bank details, update the guest side
         if (data.providedBankDetails && !bankDetailsProvided) {
           setBankDetailsProvided(data.providedBankDetails);
           setModalNotification({ message: 'Bank details have been provided by the resort! You can now proceed with payment.', type: 'success' });
@@ -176,148 +102,113 @@ export default function BookingPage() {
     return () => unsubscribe();
   }, [bankRequestId, bankDetailsProvided]);
 
-  // Real-time listener for bank details provided by admin
+  // Real-time listener for capacity updates from other bookings
   useEffect(() => {
-    if (!bookingData.bookingId) return;
+    if (!selectedDate || !dayTour) return;
     
-    const bookingRef = doc(db, 'bookings', bookingData.bookingId);
+    const year = selectedDate.getFullYear();
+    const month = String(selectedDate.getMonth() + 1).padStart(2, '0');
+    const day = String(selectedDate.getDate()).padStart(2, '0');
+    const dateKey = `${year}-${month}-${day}`;
     
-    const unsubscribe = onSnapshot(bookingRef, (docSnapshot) => {
-      if (docSnapshot.exists()) {
-        const data = docSnapshot.data();
-        // If admin has provided bank details, update the guest side
-        if (data.bankDetailsProvided && !bankDetailsProvided) {
-          setBankDetailsProvided(data.bankDetailsProvided);
-          showNotification('Bank details have been provided by the resort! You can now proceed with payment.', 'success');
-        }
+    const bookingsRef = collection(db, 'dayTourBookings');
+    const q = query(
+      bookingsRef,
+      where('selectedDate', '==', dateKey),
+      where('status', 'in', ['pending', 'confirmed', 'check-in'])
+    );
+    
+    const unsubscribe = onSnapshot(q, (querySnapshot) => {
+      let totalBookedGuests = 0;
+      querySnapshot.forEach((docSnap) => {
+        const booking = docSnap.data();
+        totalBookedGuests += (booking.adults || 0) + (booking.kids || 0) + (booking.seniors || 0);
+      });
+      
+      const capacity = dayTour.maxCapacity ? dayTour.maxCapacity - totalBookedGuests : Infinity;
+      setRemainingCapacity(capacity);
+      
+      // Re-validate guests if capacity changed
+      const currentTotalGuests = bookingData.adults + bookingData.kids + bookingData.seniors;
+      if (capacity !== Infinity && currentTotalGuests > capacity) {
+        setErrors(prev => ({ ...prev, guests: `Only ${capacity} slot(s) remaining for this date` }));
+      } else if (errors.guests && errors.guests.includes('remaining')) {
+        setErrors(prev => ({ ...prev, guests: '' }));
       }
     }, (error) => {
-      console.error('Error listening for bank details:', error);
+      console.error('Error fetching day tour bookings:', error);
     });
     
     return () => unsubscribe();
-  }, [bookingData.bookingId]);
+  }, [selectedDate, dayTour, bookingData.adults, bookingData.kids, bookingData.seniors]);
 
-  // Define checkAvailability function at component level
-  const checkAvailability = async () => {
-    if (!bookingData.checkIn || !bookingData.checkOut) return;
-    
-    setAvailabilityStatus(prev => ({ ...prev, checking: true }));
-    
-    try {
-      const bookingsRef = collection(db, 'bookings');
-      const checkInDate = new Date(bookingData.checkIn);
-      const checkOutDate = new Date(bookingData.checkOut);
-      
-      // Get room details
-      const roomDoc = await getDoc(doc(db, 'rooms', bookingData.roomId));
-      if (!roomDoc.exists()) {
-        setAvailabilityStatus({
-          checking: false,
-          isAvailable: false,
-          message: 'Room not found'
-        });
-        return;
-      }
-      
-      const roomData = roomDoc.data();
-      const totalRoomsAvailable = roomData.totalRooms || 1;
-      
-      // Only check pending, confirmed, and check-in statuses (cancelled bookings are ignored)
-      const q = query(
-        bookingsRef,
-        where('roomId', '==', bookingData.roomId),
-        where('status', 'in', ['confirmed', 'check-in', 'pending']),
-        where('checkIn', '<', checkOutDate),
-        where('checkOut', '>', checkInDate)
-      );
-      
-      const existingBookings = await getDocs(q);
-      let totalBookedCount = 0;
-      existingBookings.forEach((bookingDoc) => {
-        const booking = bookingDoc.data();
-        totalBookedCount += booking.numberOfRooms || 1;
-      });
-      
-      const isAvailable = totalBookedCount < totalRoomsAvailable;
-      const remainingRooms = totalRoomsAvailable - totalBookedCount;
-      
-      setAvailabilityStatus({
-        checking: false,
-        isAvailable,
-        message: isAvailable 
-          ? `${remainingRooms} room(s) available for these dates`
-          : `Fully booked! Only ${totalRoomsAvailable} room(s) total, all are taken.`
-      });
-    } catch (error) {
-      console.error('Error checking availability:', error);
-      setAvailabilityStatus({
-        checking: false,
-        isAvailable: false,
-        message: 'Unable to check availability. Please try again.'
-      });
-    }
-  };
-
-  // Call checkAvailability when dates change
+  // Parse selected date
   useEffect(() => {
-    if (bookingData.checkIn && bookingData.checkOut && bookingData.roomId) {
-      checkAvailability();
-    }
-  }, [bookingData.checkIn, bookingData.checkOut, bookingData.nights]);
-
-  // Calculate check-out date & time (2 hours earlier than check-in time)
-  useEffect(() => {
-    if (bookingData.checkIn && bookingData.nights) {
-      const checkOutDate = new Date(bookingData.checkIn);
-      checkOutDate.setDate(checkOutDate.getDate() + bookingData.nights);
-      
-      // Check-out time is 2 hours earlier than check-in time
-      const checkInHours = bookingData.checkIn.getHours();
-      const checkInMinutes = bookingData.checkIn.getMinutes();
-      let checkOutHours = checkInHours - 2;
-      let checkOutMinutes = checkInMinutes;
-      
-      // Handle day wrap (if check-in is before 2 AM)
-      if (checkOutHours < 0) {
-        checkOutHours += 24;
-        checkOutDate.setDate(checkOutDate.getDate() - 1);
+    if (dateParam) {
+      const date = new Date(dateParam);
+      if (!isNaN(date.getTime())) {
+        setSelectedDate(date);
+      } else {
+        router.push('/day-tour/calendar');
       }
-      
-      checkOutDate.setHours(checkOutHours, checkOutMinutes, 0, 0);
-      
-      // Format check-out time for display
-      const hour12 = checkOutHours % 12 || 12;
-      const ampm = checkOutHours < 12 ? 'AM' : 'PM';
-      setCheckOutTime(`${hour12}:${checkOutMinutes.toString().padStart(2, '0')} ${ampm}`);
-      
-      setBookingData(prev => ({ ...prev, checkOut: checkOutDate }));
-      setTotalPrice(price * bookingData.nights);
+    } else {
+      router.push('/day-tour/calendar');
     }
-  }, [bookingData.checkIn, bookingData.nights, price]);
+  }, [dateParam, router]);
 
-  const validatePhone = (phone) => {
-    const phoneRegex = /^\d{11}$/;
-    return phoneRegex.test(phone);
-  };
+  // Fetch day tour details
+  useEffect(() => {
+    const fetchDayTour = async () => {
+      if (!selectedDate) return;
+      
+      try {
+        const toursRef = collection(db, 'dayTours');
+        const q = query(toursRef, where('archived', '!=', true));
+        const querySnapshot = await getDocs(q);
+        
+        if (querySnapshot.empty) {
+          router.push('/day-tour');
+          return;
+        }
+        
+        const tourDoc = querySnapshot.docs[0];
+        const tour = { id: tourDoc.id, ...tourDoc.data() };
+        setDayTour(tour);
+        
+        setLoading(false);
+      } catch (error) {
+        console.error('Error fetching day tour:', error);
+        setLoading(false);
+      }
+    };
+    
+    fetchDayTour();
+  }, [selectedDate, router]);
 
-  const validateEmail = (email) => {
-    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-    return emailRegex.test(email);
+  // Calculate total guests and total price
+  const totalGuests = bookingData.adults + bookingData.kids + bookingData.seniors;
+  const totalPrice = (bookingData.adults * (dayTour?.adultPrice || 0)) +
+                     (bookingData.kids * (dayTour?.kidPrice || 0)) +
+                     (bookingData.seniors * (dayTour?.seniorPrice || 0));
+  const downPaymentAmount = totalPrice * 0.5;
+
+  // Format date for display
+  const formatSelectedDate = () => {
+    if (!selectedDate) return '';
+    const year = selectedDate.getFullYear();
+    const month = String(selectedDate.getMonth() + 1).padStart(2, '0');
+    const day = String(selectedDate.getDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
   };
 
   const validateGuests = () => {
-    // Use maxCapacity for validation (maximum allowed guests)
-    const guestValue = parseInt(bookingData.guests);
-    const currentMaxCapacity = bookingData.maxCapacity;
-    
-    if (isNaN(guestValue) || guestValue < 1) {
+    if (totalGuests < 1) {
       setErrors(prev => ({ ...prev, guests: 'At least 1 guest is required' }));
       return false;
     }
     
-    if (currentMaxCapacity && guestValue > currentMaxCapacity) {
-      setErrors(prev => ({ ...prev, guests: `Number of guests cannot exceed ${currentMaxCapacity}` }));
+    if (remainingCapacity !== Infinity && totalGuests > remainingCapacity) {
+      setErrors(prev => ({ ...prev, guests: `Only ${remainingCapacity} slot(s) remaining for this date` }));
       return false;
     }
     
@@ -325,21 +216,23 @@ export default function BookingPage() {
     return true;
   };
 
-  const validateStep2 = () => {
+  const validateContactInfo = () => {
     const newErrors = {};
     
     if (!bookingData.firstName.trim()) newErrors.firstName = 'First name is required';
     if (!bookingData.lastName.trim()) newErrors.lastName = 'Last name is required';
     
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
     if (!bookingData.email.trim()) {
       newErrors.email = 'Email is required';
-    } else if (!validateEmail(bookingData.email)) {
+    } else if (!emailRegex.test(bookingData.email)) {
       newErrors.email = 'Please enter a valid email address';
     }
     
+    const phoneRegex = /^\d{11}$/;
     if (!bookingData.phone.trim()) {
       newErrors.phone = 'Phone number is required';
-    } else if (!validatePhone(bookingData.phone)) {
+    } else if (!phoneRegex.test(bookingData.phone)) {
       newErrors.phone = 'Phone number must be exactly 11 digits';
     }
     
@@ -347,103 +240,29 @@ export default function BookingPage() {
     return Object.keys(newErrors).length === 0;
   };
 
+  const handleGuestChange = (field, value) => {
+    const numValue = parseInt(value) || 0;
+    setBookingData(prev => ({ ...prev, [field]: numValue }));
+    if (errors.guests) {
+      validateGuests();
+    }
+  };
+
   const handleInputChange = (field, value) => {
     setBookingData(prev => ({ ...prev, [field]: value }));
-    
-    if (field === 'guests') {
-      const guestValue = parseInt(value);
-      const currentMaxCapacity = bookingData.maxCapacity;
-      
-      // Validate on change
-      if (isNaN(guestValue) || guestValue < 1) {
-        setErrors(prev => ({ ...prev, guests: 'At least 1 guest is required' }));
-      } else if (currentMaxCapacity && guestValue > currentMaxCapacity) {
-        setErrors(prev => ({ ...prev, guests: `Number of guests cannot exceed ${currentMaxCapacity}` }));
-      } else {
-        setErrors(prev => ({ ...prev, guests: '' }));
-      }
-    }
-    
     if (errors[field]) {
       setErrors(prev => ({ ...prev, [field]: '' }));
     }
   };
 
-  const handleNotifyResort = async () => {
-    if (!selectedBankAccount) {
-      setModalNotification({ message: 'Please select a bank account first', type: 'error' });
-      return;
-    }
-    
-    setNotifyingResort(true);
-    try {
-      // Store the request in state
-      setRequestedBankInfo({
-        bankName: selectedBankAccount.bankName,
-        accountName: selectedBankAccount.accountName,
-        accountNumber: selectedBankAccount.accountNumber,
-        requestedAt: new Date().toISOString()
-      });
-      
-      // Create a bank request document in a separate collection
-      const bankRequestsRef = collection(db, 'bank_requests');
-      const docRef = await addDoc(bankRequestsRef, {
-        guestName: `${bookingData.firstName} ${bookingData.lastName}`,
-        guestEmail: bookingData.email,
-        guestPhone: bookingData.phone,
-        roomType: bookingData.roomType,
-        roomId: bookingData.roomId,
-        bookingId: generatedBookingId, // Store the formatted booking ID
-        checkIn: bookingData.checkIn,
-        checkOut: bookingData.checkOut,
-        nights: bookingData.nights,
-        totalPrice: totalPrice,
-        downPayment: downPaymentAmount,
-        requestedBank: {
-          bankName: selectedBankAccount.bankName,
-          accountName: selectedBankAccount.accountName,
-          accountNumber: selectedBankAccount.accountNumber
-        },
-        status: 'pending',
-        createdAt: new Date().toISOString(),
-        read: false
-      });
-      
-      // Store the bank request ID for real-time listener
-      setBankRequestId(docRef.id);
-      
-      setBankRequestSent(true);
-      setModalNotification({ message: 'Request sent to resort! You will receive bank details shortly.', type: 'success' });
-      
-      // Clear the bank selection UI
-      setShowBankSelection(false);
-      setSelectedBankAccount(null);
-      
-    } catch (error) {
-      console.error('Error sending bank transfer request:', error);
-      setModalNotification({ message: 'Failed to send request. Please try again.', type: 'error' });
-    } finally {
-      setNotifyingResort(false);
-    }
-  };
-
-  const showNotification = (message, type = 'success') => {
-    // Store notification in state to show in modal
-    setModalNotification({ message, type });
-    // Auto-hide after 3 seconds
-    setTimeout(() => {
-      setModalNotification(null);
-    }, 3000);
-  };
-
   const handleNextStep = () => {
     if (step === 1) {
       if (validateGuests()) {
-        setStep(step + 1);
+        setStep(2);
       }
     } else if (step === 2) {
-      if (validateStep2()) {
-        setStep(step + 1);
+      if (validateContactInfo()) {
+        setStep(3);
       }
     } else {
       setStep(step + 1);
@@ -452,7 +271,7 @@ export default function BookingPage() {
 
   const handlePreviousStep = () => {
     if (step === 1) {
-      router.push(`/rooms/calendar?roomId=${roomId}&roomType=${encodeURIComponent(roomType)}&price=${price}&capacity=${bookingData.maxCapacity}&totalRooms=${totalRooms}`);
+      router.push('/day-tour/calendar');
     } else {
       setStep(step - 1);
     }
@@ -476,65 +295,93 @@ export default function BookingPage() {
     }
   };
 
+  const handleNotifyResort = async () => {
+    if (!selectedBankAccount) {
+      setModalNotification({ message: 'Please select a bank account first', type: 'error' });
+      return;
+    }
+    
+    setNotifyingResort(true);
+    try {
+      const dateKey = formatSelectedDate();
+      
+      const bankRequestsRef = collection(db, 'daytour_bank_requests');
+      const docRef = await addDoc(bankRequestsRef, {
+        guestName: `${bookingData.firstName} ${bookingData.lastName}`,
+        guestEmail: bookingData.email,
+        guestPhone: bookingData.phone,
+        bookingType: 'daytour',
+        bookingId: generatedBookingId,
+        selectedDate: dateKey,
+        totalAmount: totalPrice,
+        downPaymentRequired: downPaymentAmount,
+        requestedBank: {
+          bankName: selectedBankAccount.bankName,
+          accountName: selectedBankAccount.accountName,
+          accountNumber: selectedBankAccount.accountNumber
+        },
+        status: 'pending',
+        createdAt: new Date().toISOString(),
+        read: false
+      });
+      
+      setBankRequestId(docRef.id);
+      setBankRequestSent(true);
+      setModalNotification({ message: 'Request sent to resort! You will receive bank details shortly.', type: 'success' });
+      setShowBankSelection(false);
+      setSelectedBankAccount(null);
+      
+    } catch (error) {
+      console.error('Error sending bank transfer request:', error);
+      setModalNotification({ message: 'Failed to send request. Please try again.', type: 'error' });
+    } finally {
+      setNotifyingResort(false);
+    }
+  };
+
   const handleSubmitBooking = async () => {
     setSubmitting(true);
     try {
-      // First, check if the room is still available for the selected dates
-      const bookingsRef = collection(db, 'bookings');
-      const checkInDate = new Date(bookingData.checkIn);
-      const checkOutDate = new Date(bookingData.checkOut);
+      const year = selectedDate.getFullYear();
+      const month = String(selectedDate.getMonth() + 1).padStart(2, '0');
+      const day = String(selectedDate.getDate()).padStart(2, '0');
+      const dateKey = `${year}-${month}-${day}`;
       
-      // Get room details to know total rooms
-      const roomDoc = await getDoc(doc(db, 'rooms', bookingData.roomId));
-      
-      if (!roomDoc.exists()) {
-        alert('Room not found. Please try again.');
-        router.push('/rooms');
-        return;
-      }
-      
-      const roomData = roomDoc.data();
-      const totalRoomsAvailable = roomData.totalRooms || 1;
-      
-      // Check existing confirmed AND pending bookings for this room during the selected dates
-      const q = query(
+      const bookingsRef = collection(db, 'dayTourBookings');
+      const bookingsQuery = query(
         bookingsRef,
-        where('roomId', '==', bookingData.roomId),
-        where('status', 'in', ['confirmed', 'check-in', 'pending']),
-        where('checkIn', '<', checkOutDate),
-        where('checkOut', '>', checkInDate)
+        where('selectedDate', '==', dateKey),
+        where('status', 'in', ['pending', 'confirmed', 'check-in'])
       );
+      const bookingsSnapshot = await getDocs(bookingsQuery);
       
-      const existingBookings = await getDocs(q);
-      let totalBookedCount = 0;
-      existingBookings.forEach((bookingDoc) => {
-        const booking = bookingDoc.data();
-        totalBookedCount += booking.numberOfRooms || 1;
+      let totalBookedGuests = 0;
+      bookingsSnapshot.forEach((docSnap) => {
+        const booking = docSnap.data();
+        totalBookedGuests += (booking.adults || 0) + (booking.kids || 0) + (booking.seniors || 0);
       });
       
-      // Check if adding this booking would exceed available rooms
-      const requestedRooms = 1;
-      if (totalBookedCount + requestedRooms > totalRoomsAvailable) {
-        alert(`Sorry, this room is fully booked for the selected dates. Only ${totalRoomsAvailable} room(s) available.`);
-        router.push('/rooms');
+      const availableCapacity = dayTour.maxCapacity ? dayTour.maxCapacity - totalBookedGuests : Infinity;
+      
+      if (totalGuests > availableCapacity) {
+        alert(`Sorry, only ${availableCapacity} slot(s) remain for this date. Please adjust your guest count.`);
+        setStep(1);
+        setSubmitting(false);
         return;
       }
       
-      // Use the pre-generated booking ID
-      const bookingId = generatedBookingId;
-      
       const booking = {
-        bookingId, // This is the formatted BOOK-xxx-xxx ID
-        roomId: bookingData.roomId,
-        roomType: bookingData.roomType,
-        price: bookingData.price,
-        nights: bookingData.nights,
-        guests: bookingData.guests,
-        totalPrice,
+        bookingId: generatedBookingId,
+        dayTourId: dayTour.id,
+        selectedDate: dateKey,
+        selectedDateISO: selectedDate.toISOString(),
+        adults: bookingData.adults,
+        kids: bookingData.kids,
+        seniors: bookingData.seniors,
+        totalGuests: totalGuests,
+        totalPrice: totalPrice,
         downPayment: downPaymentAmount,
         remainingBalance: totalPrice - downPaymentAmount,
-        checkIn: bookingData.checkIn,
-        checkOut: bookingData.checkOut,
         guestInfo: {
           firstName: bookingData.firstName,
           lastName: bookingData.lastName,
@@ -546,20 +393,16 @@ export default function BookingPage() {
         paymentProof: bookingData.paymentProof,
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
-        type: 'room',
-        numberOfRooms: 1
+        type: 'daytour'
       };
       
-      // Add bank details if provided
       if (bankDetailsProvided) {
         booking.bankDetailsProvided = bankDetailsProvided;
       }
       
-      // Add the booking to Firestore - Firestore will generate its own document ID
-      // but we're storing our formatted bookingId as a field in the document
-      await addDoc(collection(db, 'bookings'), booking);
-      
+      await addDoc(collection(db, 'dayTourBookings'), booking);
       setStep(4);
+      
     } catch (error) {
       console.error('Error creating booking:', error);
       alert('Failed to create booking. Please try again: ' + error.message);
@@ -568,61 +411,54 @@ export default function BookingPage() {
     }
   };
 
-  const formatDateTime = (date) => {
-    if (!date) return '';
-    const dateObj = date instanceof Date ? date : new Date(date);
-    return dateObj.toLocaleString('en-US', { 
-      weekday: 'long', 
-      year: 'numeric', 
-      month: 'long', 
-      day: 'numeric',
-      hour: 'numeric',
-      minute: '2-digit',
-      hour12: true
-    });
-  };
-
-  const formatDateOnly = (date) => {
-    if (!date) return '';
-    const dateObj = date instanceof Date ? date : new Date(date);
-    return dateObj.toLocaleDateString('en-US', { 
-      year: 'numeric', 
-      month: 'long', 
-      day: 'numeric'
-    });
-  };
-
-  // Get capacity display
-  const getCapacityDisplay = () => {
-    if (roomDetails) {
-      const minCap = roomDetails.capacityMin || 1;
-      const maxCap = roomDetails.capacityMax || bookingData.maxCapacity;
-      return `${minCap} – ${maxCap} guests`;
+  const copyToClipboard = async (text) => {
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopiedMessage(true);
+      setTimeout(() => setCopiedMessage(false), 2000);
+    } catch (err) {
+      console.error('Failed to copy text: ', err);
     }
-    return `${bookingData.maxCapacity} guests`;
   };
 
-  if (!checkInDateParam) {
+  const formatDate = (date) => {
+    if (!date) return '';
+    const year = date.getFullYear();
+    const month = date.toLocaleString('default', { month: 'long' });
+    const day = date.getDate();
+    const weekday = date.toLocaleString('default', { weekday: 'long' });
+    return `${weekday}, ${month} ${day}, ${year}`;
+  };
+
+  if (loading) {
+    return (
+      <GuestLayout>
+        <div className="min-h-screen bg-gradient-to-br from-ocean-ice to-blue-white flex items-center justify-center">
+          <i className="fas fa-spinner fa-spin text-3xl text-ocean-light"></i>
+        </div>
+      </GuestLayout>
+    );
+  }
+
+  if (!dayTour) {
     return (
       <GuestLayout>
         <div className="min-h-screen bg-gradient-to-br from-ocean-ice to-blue-white flex items-center justify-center">
           <div className="text-center">
-            <i className="fas fa-calendar-times text-5xl text-ocean-light mb-4"></i>
-            <p className="text-textPrimary">No check-in date selected. Please select a date first.</p>
+            <i className="fas fa-umbrella-beach text-5xl text-ocean-light/40 mb-4"></i>
+            <h2 className="text-2xl font-bold text-textPrimary mb-2">Day Tour Unavailable</h2>
+            <p className="text-textSecondary">No day tour package is currently available.</p>
             <button
-              onClick={() => router.push('/rooms')}
+              onClick={() => router.push('/day-tour')}
               className="mt-4 px-6 py-2 bg-gradient-to-r from-ocean-mid to-ocean-light text-white rounded-lg"
             >
-              Back to Rooms
+              Go Back
             </button>
           </div>
         </div>
       </GuestLayout>
     );
   }
-
-  // Get the current max capacity for display (from bookingData state, which may have been updated from DB)
-  const currentMaxCapacity = bookingData.maxCapacity;
 
   return (
     <GuestLayout>
@@ -642,8 +478,8 @@ export default function BookingPage() {
                         {s}
                       </div>
                       <div className="text-center text-xs mt-2 text-textSecondary">
-                        {s === 1 && 'Dates'}
-                        {s === 2 && 'Guest Details'}
+                        {s === 1 && 'Guests'}
+                        {s === 2 && 'Details'}
                         {s === 3 && 'Payment'}
                         {s === 4 && 'Confirmation'}
                       </div>
@@ -657,76 +493,64 @@ export default function BookingPage() {
                 </div>
               </div>
 
-              {/* Step 1: Dates */}
+              {/* Step 1: Guest Count */}
               {step === 1 && (
                 <div className="bg-white rounded-2xl shadow-lg p-8">
-                  <h2 className="text-2xl font-bold text-textPrimary mb-6">Step 1: Select Dates & Guests</h2>
-                  
-                  {availabilityStatus.checking && (
-                    <div className="mb-5 p-4 bg-ocean-ice rounded-xl">
-                      <div className="flex items-center gap-2 text-ocean-mid">
-                        <i className="fas fa-spinner fa-spin"></i>
-                        <span className="font-medium">Checking availability...</span>
-                      </div>
-                    </div>
-                  )}
+                  <h2 className="text-2xl font-bold text-textPrimary mb-6">Step 1: Number of Guests</h2>
                   
                   <div className="space-y-5">
-                    <div className="p-5 bg-ocean-ice rounded-xl">
-                      <label className="block text-sm font-semibold text-textPrimary mb-2">Check-in Date & Time</label>
-                      <p className="text-lg font-medium text-ocean-mid">{formatDateTime(bookingData.checkIn)}</p>
-                    </div>
-                    
                     <div>
-                      <label className="block text-sm font-semibold text-textPrimary mb-2">Number of Nights</label>
+                      <label className="block text-sm font-semibold text-textPrimary mb-2">Adults (16+) *</label>
                       <input
                         type="number"
-                        min="1"
-                        max="30"
-                        value={bookingData.nights}
-                        onChange={(e) => handleInputChange('nights', parseInt(e.target.value))}
+                        min="0"
+                        value={bookingData.adults}
+                        onChange={(e) => handleGuestChange('adults', e.target.value)}
                         className="w-full px-4 py-2 border border-ocean-light/20 rounded-lg focus:outline-none focus:border-ocean-light"
                       />
                     </div>
                     
                     <div>
-                      <label className="block text-sm font-semibold text-textPrimary mb-2">Number of Guests *</label>
+                      <label className="block text-sm font-semibold text-textPrimary mb-2">Kids (15 and below)</label>
                       <input
                         type="number"
-                        min="1"
-                        max={currentMaxCapacity > 0 ? currentMaxCapacity : undefined}
-                        value={bookingData.guests}
-                        onChange={(e) => handleInputChange('guests', parseInt(e.target.value))}
-                        className={`w-full px-4 py-2 border ${errors.guests ? 'border-red-500' : 'border-ocean-light/20'} rounded-lg focus:outline-none focus:border-ocean-light`}
+                        min="0"
+                        value={bookingData.kids}
+                        onChange={(e) => handleGuestChange('kids', e.target.value)}
+                        className="w-full px-4 py-2 border border-ocean-light/20 rounded-lg focus:outline-none focus:border-ocean-light"
                       />
-                      {errors.guests && <p className="text-red-500 text-sm mt-1">{errors.guests}</p>}
-                      <p className="text-xs text-textSecondary mt-1">
-                        Maximum capacity: {currentMaxCapacity > 0 ? currentMaxCapacity : 'Loading...'} {currentMaxCapacity === 1 ? 'guest' : currentMaxCapacity > 0 ? 'guests' : ''}
-                      </p>
                     </div>
                     
-                    {bookingData.checkOut && (
-                      <div className="p-5 bg-ocean-ice rounded-xl">
-                        <label className="block text-sm font-semibold text-textPrimary mb-2">Check-out Date & Time</label>
-                        <p className="text-lg font-medium text-ocean-mid">
-                          {formatDateOnly(bookingData.checkOut)} at {checkOutTime}
-                        </p>
-                        <p className="text-xs text-textSecondary mt-1">
-                          Check-out time is 2 hours earlier than check-in time
-                        </p>
-                      </div>
+                    <div>
+                      <label className="block text-sm font-semibold text-textPrimary mb-2">Seniors</label>
+                      <input
+                        type="number"
+                        min="0"
+                        value={bookingData.seniors}
+                        onChange={(e) => handleGuestChange('seniors', e.target.value)}
+                        className="w-full px-4 py-2 border border-ocean-light/20 rounded-lg focus:outline-none focus:border-ocean-light"
+                      />
+                    </div>
+                    
+                    {errors.guests && (
+                      <p className="text-red-500 text-sm">{errors.guests}</p>
                     )}
                     
                     <div className="p-5 bg-gradient-to-r from-ocean-ice to-blue-white rounded-xl">
-                      <label className="block text-sm font-semibold text-textPrimary mb-2">Total Price</label>
-                      <p className="text-3xl font-bold text-ocean-mid">₱{totalPrice.toLocaleString()}</p>
-                      <p className="text-xs text-textSecondary">₱{price.toLocaleString()} x {bookingData.nights} night(s)</p>
-                      
-                      {/* Down Payment Display */}
-                      <div className="mt-3 pt-3 border-t border-ocean-light/20">
-                        <p className="text-sm font-semibold text-amber-600 mb-1">Down Payment Required (50%)</p>
-                        <p className="text-2xl font-bold text-amber-600">₱{downPaymentAmount.toLocaleString()}</p>
-                        <p className="text-xs text-textSecondary mt-1">Pay 50% upfront to confirm your reservation</p>
+                      <h3 className="text-lg font-semibold text-textPrimary mb-3">Booking Summary</h3>
+                      <div className="space-y-2">
+                        <div className="flex justify-between">
+                          <span className="text-textSecondary">Total Guests:</span>
+                          <span className="font-semibold">{totalGuests}</span>
+                        </div>
+                        <div className="flex justify-between">
+                          <span className="text-textSecondary">Total Price:</span>
+                          <span className="font-bold text-ocean-mid">₱{totalPrice.toLocaleString()}</span>
+                        </div>
+                        <div className="flex justify-between pt-2 border-t border-ocean-light/20">
+                          <span className="text-textSecondary">Down Payment (50%):</span>
+                          <span className="font-bold text-amber-600">₱{downPaymentAmount.toLocaleString()}</span>
+                        </div>
                       </div>
                     </div>
                   </div>
@@ -741,9 +565,9 @@ export default function BookingPage() {
                     </button>
                     <button
                       onClick={handleNextStep}
-                      disabled={!availabilityStatus.isAvailable || availabilityStatus.checking || !!errors.guests || !currentMaxCapacity}
+                      disabled={totalGuests < 1 || (remainingCapacity !== Infinity && totalGuests > remainingCapacity)}
                       className={`flex-1 py-3 rounded-xl font-medium transition-all duration-300 ${
-                        availabilityStatus.isAvailable && !availabilityStatus.checking && !errors.guests && currentMaxCapacity
+                        totalGuests >= 1 && (remainingCapacity === Infinity || totalGuests <= remainingCapacity)
                           ? 'bg-gradient-to-r from-ocean-mid to-ocean-light text-white hover:shadow-lg'
                           : 'bg-gray-200 text-gray-500 cursor-not-allowed'
                       }`}
@@ -768,7 +592,7 @@ export default function BookingPage() {
                         onChange={(e) => handleInputChange('firstName', e.target.value)}
                         className={`w-full px-4 py-2 border ${errors.firstName ? 'border-red-500' : 'border-ocean-light/20'} rounded-lg focus:outline-none focus:border-ocean-light`}
                       />
-                      {errors.firstName && <p className="text-red-500 text-sm mt-1">{errors.firstName}</p>}
+                      {errors.firstName && <p className="text-red-500 text-xs mt-1">{errors.firstName}</p>}
                     </div>
                     
                     <div>
@@ -779,7 +603,7 @@ export default function BookingPage() {
                         onChange={(e) => handleInputChange('lastName', e.target.value)}
                         className={`w-full px-4 py-2 border ${errors.lastName ? 'border-red-500' : 'border-ocean-light/20'} rounded-lg focus:outline-none focus:border-ocean-light`}
                       />
-                      {errors.lastName && <p className="text-red-500 text-sm mt-1">{errors.lastName}</p>}
+                      {errors.lastName && <p className="text-red-500 text-xs mt-1">{errors.lastName}</p>}
                     </div>
                     
                     <div>
@@ -790,7 +614,7 @@ export default function BookingPage() {
                         onChange={(e) => handleInputChange('email', e.target.value)}
                         className={`w-full px-4 py-2 border ${errors.email ? 'border-red-500' : 'border-ocean-light/20'} rounded-lg focus:outline-none focus:border-ocean-light`}
                       />
-                      {errors.email && <p className="text-red-500 text-sm mt-1">{errors.email}</p>}
+                      {errors.email && <p className="text-red-500 text-xs mt-1">{errors.email}</p>}
                     </div>
                     
                     <div>
@@ -802,7 +626,7 @@ export default function BookingPage() {
                         placeholder="09123456789"
                         className={`w-full px-4 py-2 border ${errors.phone ? 'border-red-500' : 'border-ocean-light/20'} rounded-lg focus:outline-none focus:border-ocean-light`}
                       />
-                      {errors.phone && <p className="text-red-500 text-sm mt-1">{errors.phone}</p>}
+                      {errors.phone && <p className="text-red-500 text-xs mt-1">{errors.phone}</p>}
                     </div>
                   </div>
                   
@@ -829,7 +653,6 @@ export default function BookingPage() {
                 <div className="bg-white rounded-2xl shadow-lg p-8">
                   <h2 className="text-2xl font-bold text-textPrimary mb-6">Step 3: Payment</h2>
                   
-                  {/* Payment Method Selection */}
                   <div className="mb-6">
                     <label className="block text-sm font-semibold text-textPrimary mb-3">Select Payment Method</label>
                     <div className="grid grid-cols-2 gap-4">
@@ -871,7 +694,7 @@ export default function BookingPage() {
                         {paymentSettings.gcashQRCode ? (
                           <>
                             <div className="flex justify-center mb-3">
-                              <div className="w-48 h-48 bg-white rounded-xl flex items-center justify-center border border-ocean-light/20 overflow-hidden relative">
+                              <div className="w-48 h-48 bg-white rounded-xl flex items-center justify-center border border-ocean-light/20 overflow-hidden">
                                 <img
                                   src={paymentSettings.gcashQRCode}
                                   alt="GCash QR Code"
@@ -899,7 +722,7 @@ export default function BookingPage() {
                         </p>
                         <ul className="text-xs text-blue-700 space-y-1 ml-4 list-disc">
                           <li>You are only required to pay the <strong>down payment (50%)</strong> to confirm your reservation.</li>
-                          <li>The <strong>remaining balance</strong> (₱{(totalPrice - downPaymentAmount).toLocaleString()}) should be paid at the resort upon check-in.</li>
+                          <li>The <strong>remaining balance</strong> (₱{(totalPrice - downPaymentAmount).toLocaleString()}) should be paid at the resort.</li>
                           <li>If you cancel your reservation, the resort will retain <strong>50% of the down payment</strong>.</li>
                         </ul>
                       </div>
@@ -937,7 +760,7 @@ export default function BookingPage() {
                     </div>
                   )}
                   
-                  {/* Bank Transfer Section */}
+                  {/* Bank Transfer Section for Day Tour */}
                   {paymentMethod === 'bank_transfer' && (
                     <div className="space-y-6">
                       <div className="p-5 bg-ocean-ice rounded-xl">
@@ -970,23 +793,9 @@ export default function BookingPage() {
                             <div className="w-16 h-16 bg-blue-100 rounded-full flex items-center justify-center mx-auto mb-3">
                               <i className="fas fa-clock text-blue-600 text-2xl"></i>
                             </div>
-                            <p className="text-textSecondary font-medium mb-2">
-                              Request Sent!
-                            </p>
-                            <p className="text-sm text-textSecondary">
-                              Your bank transfer request has been sent to the resort.
-                            </p>
-                            <p className="text-xs text-textSecondary mt-2">
-                              The resort will provide bank account details shortly. Please check back.
-                            </p>
-                            {requestedBankInfo && (
-                              <div className="mt-3 p-3 bg-blue-50 rounded-lg">
-                                <p className="text-xs text-blue-700">
-                                  <i className="fas fa-university mr-1"></i>
-                                  Requested Bank: <strong>{requestedBankInfo.bankName}</strong>
-                                </p>
-                              </div>
-                            )}
+                            <p className="text-textSecondary font-medium mb-2">Request Sent!</p>
+                            <p className="text-sm text-textSecondary">Your bank transfer request has been sent to the resort.</p>
+                            <p className="text-xs text-textSecondary mt-2">The resort will provide bank account details shortly.</p>
                           </div>
                         ) : (
                           <div className="text-center py-4">
@@ -995,9 +804,7 @@ export default function BookingPage() {
                                 <div className="w-16 h-16 bg-amber-100 rounded-full flex items-center justify-center mx-auto mb-3">
                                   <i className="fas fa-university text-amber-600 text-2xl"></i>
                                 </div>
-                                <p className="text-textSecondary mb-3">
-                                  Select your preferred bank to receive account details:
-                                </p>
+                                <p className="text-textSecondary mb-3">Select your preferred bank:</p>
                                 {paymentSettings.bankAccounts.length > 0 ? (
                                   <div className="space-y-2 mb-4">
                                     {paymentSettings.bankAccounts.map((bank) => (
@@ -1007,7 +814,7 @@ export default function BookingPage() {
                                           setSelectedBankAccount(bank);
                                           setShowBankSelection(true);
                                         }}
-                                        className="w-full text-left p-3 border border-ocean-light/20 rounded-lg hover:bg-ocean-ice transition-all duration-200"
+                                        className="w-full text-left p-3 border border-ocean-light/20 rounded-lg hover:bg-ocean-ice transition"
                                       >
                                         <p className="font-semibold text-textPrimary">{bank.bankName}</p>
                                         <p className="text-xs text-textSecondary">{bank.accountName}</p>
@@ -1028,7 +835,7 @@ export default function BookingPage() {
                                 <button
                                   onClick={handleNotifyResort}
                                   disabled={notifyingResort}
-                                  className="w-full px-6 py-2 bg-amber-500 text-white rounded-lg font-medium hover:bg-amber-600 transition-all duration-200"
+                                  className="w-full px-6 py-2 bg-amber-500 text-white rounded-lg font-medium hover:bg-amber-600 transition"
                                 >
                                   {notifyingResort ? (
                                     <><i className="fas fa-spinner fa-spin mr-2"></i>Sending Request...</>
@@ -1038,9 +845,9 @@ export default function BookingPage() {
                                 </button>
                                 <button
                                   onClick={() => setShowBankSelection(false)}
-                                  className="w-full px-6 py-2 border border-ocean-light/20 rounded-lg text-textSecondary hover:bg-ocean-ice transition-all duration-200"
+                                  className="w-full px-6 py-2 border border-ocean-light/20 rounded-lg text-textSecondary hover:bg-ocean-ice transition"
                                 >
-                                  Back to Bank Selection
+                                  Back
                                 </button>
                               </div>
                             )}
@@ -1061,7 +868,7 @@ export default function BookingPage() {
                         </p>
                         <ul className="text-xs text-blue-700 space-y-1 ml-4 list-disc">
                           <li>You are only required to pay the <strong>down payment (50%)</strong> to confirm your reservation.</li>
-                          <li>The <strong>remaining balance</strong> (₱{(totalPrice - downPaymentAmount).toLocaleString()}) should be paid at the resort upon check-in.</li>
+                          <li>The <strong>remaining balance</strong> (₱{(totalPrice - downPaymentAmount).toLocaleString()}) should be paid at the resort.</li>
                           <li>If you cancel your reservation, the resort will retain <strong>50% of the down payment</strong>.</li>
                         </ul>
                       </div>
@@ -1075,11 +882,11 @@ export default function BookingPage() {
                               accept="image/*"
                               onChange={handlePaymentProofUpload}
                               className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
-                              id="payment-proof-upload"
+                              id="payment-proof-upload-bank"
                               disabled={uploading}
                             />
                             <label
-                              htmlFor="payment-proof-upload"
+                              htmlFor="payment-proof-upload-bank"
                               className={`inline-flex items-center gap-2 px-6 py-2.5 rounded-lg font-medium transition-all duration-300 cursor-pointer ${
                                 uploading
                                   ? 'bg-gray-300 text-gray-500 cursor-not-allowed'
@@ -1132,7 +939,7 @@ export default function BookingPage() {
                   </div>
                   <h2 className="text-2xl font-bold text-textPrimary mb-2">Booking Confirmed!</h2>
                   <p className="text-textSecondary mb-4">
-                    Thank you for your booking! A confirmation email will be sent to {bookingData.email}. You can also track and cancel your reservation anytime through the Reservation Tracker page.
+                    Thank you for booking your day tour! A confirmation email will be sent to {bookingData.email}. You can also track and cancel your reservation anytime through the Reservation Tracker page.
                   </p>
                   
                   <div className="p-4 bg-ocean-ice rounded-lg mb-4">
@@ -1141,16 +948,15 @@ export default function BookingPage() {
                       <strong className="text-lg font-mono">{generatedBookingId}</strong>
                       <button
                         onClick={() => copyToClipboard(generatedBookingId)}
-                        className="p-1.5 rounded-lg bg-white hover:bg-ocean-light/10 text-ocean-mid transition-all duration-200"
+                        className="p-1.5 rounded-lg bg-white hover:bg-ocean-light/10 text-ocean-mid transition"
                         title="Copy to clipboard"
                       >
                         <i className="fas fa-copy"></i>
                       </button>
                     </div>
                     {copiedMessage && (
-                      <p className="text-xs text-green-600 mt-1 animate-fadeIn">
-                        <i className="fas fa-check-circle mr-1"></i>
-                        Copied!
+                      <p className="text-xs text-green-600 mt-1">
+                        <i className="fas fa-check-circle mr-1"></i>Copied!
                       </p>
                     )}
                   </div>
@@ -1162,12 +968,13 @@ export default function BookingPage() {
                       Remaining balance of <strong>₱{(totalPrice - downPaymentAmount).toLocaleString()}</strong> is payable at the resort.
                     </p>
                   </div>
+                  
                   <div className="flex gap-3">
                     <button
-                      onClick={() => router.push('/rooms')}
+                      onClick={() => router.push('/day-tour')}
                       className="flex-1 py-3 border border-ocean-light/20 rounded-xl text-textSecondary font-medium hover:bg-ocean-ice transition"
                     >
-                      Back to Room Page
+                      Back to Day Tour Page
                     </button>
                     <button
                       onClick={() => router.push('/')}
@@ -1180,106 +987,162 @@ export default function BookingPage() {
               )}
             </div>
 
-            {/* Right Column - Room Details Card (30%) */}
+            {/* Right Column - Day Tour Pricing Container + Capacity Display + Guest Breakdown */}
+            {/* Fixed layout: No sticky on the outer container, only the pricing container has sticky positioning */}
             <div className="lg:w-[30%]">
-              <div className="bg-white rounded-xl shadow-md border border-ocean-light/20 overflow-hidden sticky top-8">
-                <div className="relative h-48 bg-gradient-to-br from-ocean-pale to-ocean-ice overflow-hidden">
-                  {roomDetails?.images && roomDetails.images[0] ? (
-                    <Image
-                      src={roomDetails.images[0]}
-                      alt={roomType}
-                      fill
-                      className="object-cover"
-                    />
-                  ) : (
-                    <div className="flex items-center justify-center h-full">
-                      <i className="fas fa-hotel text-5xl text-ocean-light/30"></i>
+              <div className="sticky top-8 space-y-4">
+                <div className="bg-white rounded-xl shadow-md border border-ocean-light/20 overflow-hidden">
+                  <div className="bg-gradient-to-r from-ocean-mid to-ocean-light px-5 py-3">
+                    <h3 className="font-semibold text-white text-lg flex items-center gap-2">
+                      <i className="fas fa-tag"></i>
+                      Day Tour Pricing
+                    </h3>
+                  </div>
+                  
+                  <div className="p-5 space-y-4">
+                    <div className="bg-ocean-ice rounded-lg p-3">
+                      <h4 className="text-xs font-semibold text-ocean-mid uppercase tracking-wide mb-2 flex items-center gap-1">
+                        <i className="fas fa-calendar-check text-ocean-light text-xs"></i>
+                        Selected Schedule
+                      </h4>
+                      <p className="text-base font-semibold text-textPrimary">
+                        {selectedDate ? formatDate(selectedDate) : 'No date selected'}
+                      </p>
+                    </div>
+
+                    <div>
+                      <h4 className="text-sm font-semibold text-textPrimary mb-2 flex items-center gap-1">
+                        <i className="fas fa-coins text-ocean-light text-xs"></i>
+                        Rates
+                      </h4>
+                      <div className="grid grid-cols-3 gap-3 text-center">
+                        <div className="bg-ocean-ice rounded-lg p-2">
+                          <p className="text-xs text-textSecondary">Adult (16+)</p>
+                          <p className="text-base font-bold text-ocean-mid">₱{dayTour.adultPrice?.toLocaleString()}</p>
+                        </div>
+                        <div className="bg-ocean-ice rounded-lg p-2">
+                          <p className="text-xs text-textSecondary">Kid (15-)</p>
+                          <p className="text-base font-bold text-ocean-mid">₱{dayTour.kidPrice?.toLocaleString()}</p>
+                        </div>
+                        <div className="bg-ocean-ice rounded-lg p-2">
+                          <p className="text-xs text-textSecondary">Senior</p>
+                          <p className="text-base font-bold text-ocean-mid">₱{dayTour.seniorPrice?.toLocaleString()}</p>
+                        </div>
+                      </div>
+                    </div>
+
+                    {dayTour.inclusions && dayTour.inclusions.length > 0 && (
+                      <div>
+                        <h4 className="text-sm font-semibold text-textPrimary mb-2 flex items-center gap-1">
+                          <i className="fas fa-check-circle text-green-600 text-xs"></i>
+                          Inclusions
+                        </h4>
+                        <ul className="space-y-1.5">
+                          {dayTour.inclusions.map((item, idx) => (
+                            <li key={idx} className="text-sm text-textSecondary flex items-start gap-2">
+                              <i className="fas fa-check text-ocean-light text-xs mt-0.5"></i>
+                              <span>{item}</span>
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
+
+                    {dayTour.description && (
+                      <div>
+                        <h4 className="text-sm font-semibold text-textPrimary mb-2 flex items-center gap-1">
+                          <i className="fas fa-info-circle text-ocean-light text-xs"></i>
+                          Description
+                        </h4>
+                      <p className="text-sm text-textSecondary leading-relaxed">
+                        {dayTour.description}
+                      </p>
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {/* Maximum & Remaining Capacity Display - Now inside the sticky container */}
+              <div className="bg-gradient-to-r from-amber-50 to-orange-50 rounded-xl shadow-sm border border-amber-200 p-4">
+                <div className="flex items-center justify-between mb-3 pb-2 border-b border-amber-200">
+                  <div className="flex items-center gap-3">
+                    <div className="w-10 h-10 rounded-full bg-amber-100 flex items-center justify-center">
+                      <i className="fas fa-users text-amber-600"></i>
+                    </div>
+                    <div>
+                      <p className="text-xs text-amber-700 uppercase tracking-wide font-semibold">
+                        Maximum Capacity
+                      </p>
+                      <p className="text-2xl font-bold text-amber-800">
+                        {dayTour.maxCapacity} <span className="text-sm font-normal">guests</span>
+                      </p>
+                    </div>
+                  </div>
+                </div>
+                
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-3">
+                    <div className="w-10 h-10 rounded-full bg-green-100 flex items-center justify-center">
+                      <i className="fas fa-chart-line text-green-600"></i>
+                    </div>
+                    <div>
+                      <p className="text-xs text-green-700 uppercase tracking-wide font-semibold">
+                        Remaining Capacity
+                      </p>
+                      <p className="text-2xl font-bold text-green-700">
+                        {remainingCapacity !== Infinity ? remainingCapacity : dayTour.maxCapacity} <span className="text-sm font-normal">guests</span>
+                      </p>
+                    </div>
+                  </div>
+                  {remainingCapacity !== Infinity && remainingCapacity <= 10 && remainingCapacity > 0 && (
+                    <div className="bg-orange-100 rounded-lg px-3 py-1">
+                      <p className="text-xs text-orange-700 font-semibold">⚠️ Limited Slots</p>
                     </div>
                   )}
                 </div>
 
-                <div className="p-5">
-                  <h3 className="font-bold text-textPrimary text-xl mb-2">{roomType}</h3>
-                  <div className="mb-4">
-                    <p className="text-2xl font-bold text-ocean-mid">
-                      ₱{parseInt(price).toLocaleString()}
-                      <span className="text-sm font-normal text-textSecondary">/night</span>
-                    </p>
-                  </div>
-                  <div className="flex items-center gap-2 text-textSecondary mb-4">
-                    <i className="fas fa-users text-ocean-light"></i>
-                    <span className="text-sm">{getCapacityDisplay()}</span>
-                  </div>
-                  
-                  {/* Selected Schedule Section */}
-                  <div className="bg-ocean-ice rounded-lg p-3 mb-4">
-                    <h4 className="text-xs font-semibold text-ocean-mid uppercase tracking-wide mb-2 flex items-center gap-1">
-                      <i className="fas fa-calendar-check text-ocean-light text-xs"></i>
-                      Selected Schedule
-                    </h4>
-                    {bookingData.checkIn ? (
-                      <>
-                        <p className="text-base font-semibold text-textPrimary">
-                          {formatDateOnly(bookingData.checkIn)}
-                        </p>
-                        <p className="text-sm text-ocean-mid font-medium mt-1">
-                          <i className="fas fa-clock mr-1"></i>
-                          {formatDateTime(bookingData.checkIn).split('at')[1]?.trim() || ''}
-                        </p>
-                        {bookingData.checkOut && (
-                          <p className="text-xs text-textSecondary mt-2">
-                            Check-out: {formatDateOnly(bookingData.checkOut)} at {checkOutTime}
-                          </p>
-                        )}
-                      </>
-                    ) : (
-                      <p className="text-base font-semibold text-textPrimary">No date selected</p>
-                    )}
-                  </div>
-
-                  {/* Room Amenities (if available) */}
-                  {roomDetails?.amenities && roomDetails.amenities.length > 0 && (
-                    <div className="mb-4">
-                      <h4 className="text-sm font-semibold text-textPrimary mb-2 flex items-center gap-1">
-                        <i className="fas fa-concierge-bell text-ocean-light text-xs"></i>
-                        Amenities
-                      </h4>
-                      <div className="flex flex-wrap gap-1.5">
-                        {roomDetails.amenities.slice(0, 4).map((amenity, idx) => (
-                          <span key={idx} className="text-xs bg-ocean-ice text-textSecondary px-2 py-1 rounded-full">
-                            {amenity}
-                          </span>
-                        ))}
-                        {roomDetails.amenities.length > 4 && (
-                          <span className="text-xs bg-ocean-ice text-textSecondary px-2 py-1 rounded-full">
-                            +{roomDetails.amenities.length - 4} more
-                          </span>
-                        )}
-                      </div>
+                {/* Guest Breakdown Section */}
+                <div className="mt-4 pt-3 border-t border-amber-200">
+                  <div className="flex items-center gap-2 mb-3">
+                    <div className="w-6 h-6 rounded-full bg-blue-100 flex items-center justify-center">
+                      <i className="fas fa-users text-blue-600 text-xs"></i>
                     </div>
-                  )}
+                    <p className="text-sm font-semibold text-textPrimary">Guest Breakdown</p>
+                  </div>
+                  <div className="space-y-2">
+                    <div className="flex justify-between items-center">
+                      <span className="text-sm text-textSecondary">
+                        <i className="fas fa-user-tie text-blue-500 mr-2 text-xs"></i>
+                        Senior Guests
+                      </span>
+                      <span className="font-semibold text-textPrimary">{bookingData.seniors}</span>
+                    </div>
+                    <div className="flex justify-between items-center">
+                      <span className="text-sm text-textSecondary">
+                        <i className="fas fa-user text-green-500 mr-2 text-xs"></i>
+                        Adult Guests
+                      </span>
+                      <span className="font-semibold text-textPrimary">{bookingData.adults}</span>
+                    </div>
+                    <div className="flex justify-between items-center">
+                      <span className="text-sm text-textSecondary">
+                        <i className="fas fa-child text-yellow-500 mr-2 text-xs"></i>
+                        Kid Guests
+                      </span>
+                      <span className="font-semibold text-textPrimary">{bookingData.kids}</span>
+                    </div>
+                    <div className="flex justify-between items-center pt-2 border-t border-amber-100">
+                      <span className="text-sm font-semibold text-textPrimary">Total Guests</span>
+                      <span className="font-bold text-ocean-mid">{totalGuests}</span>
+                    </div>
+                  </div>
                 </div>
               </div>
             </div>
           </div>
         </div>
       </div>
-
-      <style jsx>{`
-        @keyframes fadeIn {
-          from {
-            opacity: 0;
-            transform: translateY(-5px);
-          }
-          to {
-            opacity: 1;
-            transform: translateY(0);
-          }
-        }
-        .animate-fadeIn {
-          animation: fadeIn 0.3s ease-out;
-        }
-      `}</style>
-    </GuestLayout>
+    </div>
+  </GuestLayout>
   );
 }

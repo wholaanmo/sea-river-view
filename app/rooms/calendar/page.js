@@ -293,13 +293,14 @@ export default function RoomCalendar() {
     return date < minBookableDate && date >= today;
   };
 
-  const hasAnyBlockedSlot = (date) => {
-    if (!date) return false;
+  /** Orange-dot: at least one hour on this date has all units marked unavailable by admin (admin block ≥ capacity for that hour). */
+  const hasAnyHourFullyAdminUnavailable = (date) => {
+    if (!date || totalRoomUnits <= 0) return false;
     const dateKey = toLocalDateKey(date);
     const day = blockedSlots[dateKey];
     if (!day) return false;
     for (let h = 0; h < 24; h++) {
-      if ((day[h] || 0) > 0) return true;
+      if ((day[h] || 0) >= totalRoomUnits) return true;
     }
     return false;
   };
@@ -455,7 +456,12 @@ export default function RoomCalendar() {
                         const isFullyBooked = isDateFullyBooked(day);
                         const isSelected = selectedDate && selectedDate.toDateString() === day.toDateString();
                         const isFullyBlockedByAdmin = isDateFullyBlockedByAdmin(day);
-                        const hasPartialBlock = hasAnyBlockedSlot(day) && !isFullyBlockedByAdmin;
+                        const showHasUnavailableSlotsDot =
+                          !isPast &&
+                          !isTooSoon &&
+                          !isFullyBooked &&
+                          !isFullyBlockedByAdmin &&
+                          hasAnyHourFullyAdminUnavailable(day);
 
                         let bgColor = 'bg-white';
                         let textColor = 'text-textPrimary';
@@ -510,7 +516,7 @@ export default function RoomCalendar() {
                             <span className={`absolute inset-0 flex items-center justify-center text-sm font-medium ${textColor}`}>
                               {day.getDate()}
                             </span>
-                            {hasPartialBlock && !isPast && !isTooSoon && !isFullyBooked && !isFullyBlockedByAdmin && (
+                            {showHasUnavailableSlotsDot && (
                               <span className="absolute bottom-1 left-1/2 transform -translate-x-1/2 w-1.5 h-1.5 bg-orange-400 rounded-full"></span>
                             )}
                           </button>
@@ -531,7 +537,7 @@ export default function RoomCalendar() {
                     </div>
                     <div className="flex items-center gap-1.5">
                       <div className="w-3 h-3 bg-gray-100 border border-gray-200 rounded"></div>
-                      <span className="text-textSecondary">Past / Too Soon</span>
+                      <span className="text-textSecondary">Past Dates</span>
                     </div>
                     <div className="flex items-center gap-1.5">
                       <div className="w-3 h-3 bg-ocean-mid rounded"></div>
@@ -585,7 +591,7 @@ export default function RoomCalendar() {
                       </p>
                       {selectedDate ? (
                         <>
-                          <p className="text-sm text-textSecondary">
+                          <p className="text-base font-semibold text-textPrimary">
                             {selectedDate.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' })}
                           </p>
                           {selectedTime && (
@@ -596,7 +602,7 @@ export default function RoomCalendar() {
                           )}
                         </>
                       ) : (
-                        <p className="text-sm text-textSecondary">No date selected</p>
+                        <p className="text-base font-semibold text-textPrimary">No date selected</p>
                       )}
                     </div>
                     <button

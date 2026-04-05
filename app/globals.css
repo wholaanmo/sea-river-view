@@ -1,18 +1,20 @@
 @import "tailwindcss";
 
 :root {
-  --color-ocean-deep: #0B3B4F;
-  --color-ocean-mid: #1B5E6B;
-  --color-ocean-light: #2C7A7A;
-  --color-ocean-lighter: #4A9B9B;
-  --color-ocean-pale: #E0F2FE;
-  --color-ocean-ice: #F0F9FF;
-  --color-blue-white: #F8FAFF;
-  --color-textPrimary: #0B3B4F;
-  --color-textSecondary: #2C7A7A;
-  --color-accent-blue: #4FB3B3;
-  --color-neutral: #9CA3AF;
-  --color-white: #FFFFFF;
+--color-ocean-deep: #15546A;       /* rich cyan-blue */
+--color-ocean-mid:  #2EA3C6;       /* vibrant soft cyan */
+--color-ocean-light: #4FC3E8;      /* light airy cyan */
+--color-ocean-lighter: #AEEBFF;    /* very soft cyan */
+--color-ocean-pale: #D6F6FF;       /* pale cyan */
+--color-ocean-ice: #F2FCFF;        /* almost white cyan */
+--color-blue-white: #F8FAFF;       /* subtle bluish white */
+
+--color-textPrimary: #1F6F8B;      /* readable darker cyan */
+--color-textSecondary: #4FC3E8;    /* softer text */
+
+--color-accent-blue: #4FC3E8;      /* buttons / highlights */
+--color-neutral: #9CA3AF;
+--color-white: #FFFFFF;
   --navbar-height: 60px;
 }
 

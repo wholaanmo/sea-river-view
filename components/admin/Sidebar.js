@@ -62,7 +62,8 @@ export default function AdminSidebar({ isOpen, onToggle }) {
     { path: '/dashboard/admin/reservations', icon: 'event', label: 'Reservations', materialIcon: 'event' },
     { path: '/dashboard/admin/rooms', icon: 'hotel', label: 'Rooms', materialIcon: 'hotel' },
     { path: '/dashboard/admin/day-tour', icon: 'wb_sunny', label: 'Day Tour', materialIcon: 'wb_sunny' },
-    { path: '/dashboard/admin/calendar', icon: 'calendar_month', label: 'Calendar', materialIcon: 'calendar_month' },
+    { path: '/dashboard/admin/calendar', icon: 'bed', label: 'Rooms Calendar', materialIcon: 'calendar_view_month' },
+    { path: '/dashboard/admin/calendar-daytour', icon: 'event', label: 'Day Tour Calendar', materialIcon: 'event' },
     { path: '/dashboard/admin/payment', icon: 'payment', label: 'Payment', materialIcon: 'payment' },
     { path: '/dashboard/admin/feedback', icon: 'feedback', label: 'Feedback', materialIcon: 'feedback' },
     { path: '/dashboard/admin/audit', icon: 'history', label: 'Audit Logs', materialIcon: 'history' },
@@ -86,7 +87,7 @@ export default function AdminSidebar({ isOpen, onToggle }) {
           is_expanded ? 'w-sidebar-expanded' : 'w-sidebar-collapsed'
         } ${isOpen ? 'translate-x-0' : '-translate-x-full'} lg:translate-x-0`}
         style={{
-          background: 'linear-gradient(135deg, #0B3B4F 0%, #1B5E6B 50%, #2C7A7A 100%)',
+          background: 'linear-gradient(135deg, var(--color-ocean-deep) 0%, var(--color-ocean-mid) 50%, var(--color-ocean-light) 100%)',
           boxShadow: '5px 0 25px rgba(0, 0, 0, 0.1)',
           scrollbarWidth: 'none',
           msOverflowStyle: 'none',

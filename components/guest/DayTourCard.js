@@ -3,9 +3,11 @@
 import Image from 'next/image';
 import { useState } from 'react';
 import ImageSlider from './ImageSlider';
+import { useRouter } from 'next/navigation';
 
 export default function DayTourCard({ tour }) {
   const [showDetailsModal, setShowDetailsModal] = useState(false);
+  const router = useRouter();
 
   return (
     <>
@@ -97,9 +99,12 @@ export default function DayTourCard({ tour }) {
             >
               Details
             </button>
-            <button className="flex-1 px-4 py-2.5 bg-gradient-to-r from-ocean-mid to-ocean-light text-white rounded-xl font-medium hover:shadow-lg hover:-translate-y-0.5 transition-all duration-300">
-              Book Now
-            </button>
+<button 
+  onClick={() => router.push('/day-tour/calendar')}
+  className="flex-1 px-4 py-2.5 bg-gradient-to-r from-ocean-mid to-ocean-light text-white rounded-xl font-medium hover:shadow-lg hover:-translate-y-0.5 transition-all duration-300"
+>
+  Book Now
+</button>
           </div>
         </div>
       </div>
@@ -186,7 +191,7 @@ export default function DayTourCard({ tour }) {
               >
                 Close
               </button>
-              <button className="px-5 py-2.5 bg-gradient-to-r from-ocean-mid to-ocean-light rounded-xl text-white text-sm font-medium hover:shadow-lg hover:-translate-y-0.5 transition-all duration-300">
+              <button onClick={() => router.push('/day-tour/calendar')} className="px-5 py-2.5 bg-gradient-to-r from-ocean-mid to-ocean-light rounded-xl text-white text-sm font-medium hover:shadow-lg hover:-translate-y-0.5 transition-all duration-300">
                 Book Now
               </button>
             </div>

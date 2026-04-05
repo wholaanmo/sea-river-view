@@ -5,7 +5,7 @@ import { useState, useEffect, useRef } from 'react';
 import { db } from '../../lib/firebase';
 import { collection, query, where, getDocs, updateDoc, doc, addDoc, onSnapshot } from 'firebase/firestore';
 import GuestLayout from '../guest/layout';
-import { sendCancellationEmail } from '../../lib/emailService';
+import { sendCancellationEmail, sendDayTourCancellationEmail } from '../../lib/emailService';
 
 export default function ReservationTrackerPage() {
   const [email, setEmail] = useState('');
@@ -16,6 +16,10 @@ export default function ReservationTrackerPage() {
   const [showCancelModal, setShowCancelModal] = useState(false);
   const [cancelling, setCancelling] = useState(false);
   const [showSuccessModal, setShowSuccessModal] = useState(false);
+  const [cancellationReason, setCancellationReason] = useState('');
+  const [reservationType, setReservationType] = useState(null); // 'room' or 'daytour'
+  const [reservationId, setReservationId] = useState(null);
+  const [reservationCollection, setReservationCollection] = useState(null);
   
   // Store the unsubscribe function for real-time listener
   const unsubscribeRef = useRef(null);
@@ -50,6 +54,7 @@ export default function ReservationTrackerPage() {
     setLoading(true);
     setError('');
     setReservation(null);
+    setReservationType(null);
     
     // Unsubscribe from any previous listener
     if (unsubscribeRef.current) {
@@ -58,49 +63,99 @@ export default function ReservationTrackerPage() {
     }
     
     try {
+      // First, try to find in room bookings
       const bookingsRef = collection(db, 'bookings');
-      const q = query(
+      const roomQuery = query(
         bookingsRef,
         where('guestInfo.email', '==', email.toLowerCase().trim()),
         where('bookingId', '==', referenceNumber.trim().toUpperCase())
       );
       
-      const querySnapshot = await getDocs(q);
+      const roomSnapshot = await getDocs(roomQuery);
       
-      if (querySnapshot.empty) {
-        setError('No reservation found. Please check your details and try again.');
+      if (!roomSnapshot.empty) {
+        const bookingDoc = roomSnapshot.docs[0];
+        const bookingData = bookingDoc.data();
+        
+        setReservationType('room');
+        setReservationId(bookingDoc.id);
+        setReservationCollection('bookings');
+        
+        setReservation({
+          id: bookingDoc.id,
+          ...bookingData,
+          type: 'room'
+        });
+        
+        // Set up real-time listener for this specific booking document
+        const bookingRef = doc(db, 'bookings', bookingDoc.id);
+        const unsubscribe = onSnapshot(bookingRef, (docSnapshot) => {
+          if (docSnapshot.exists()) {
+            const updatedData = docSnapshot.data();
+            setReservation(prev => ({
+              ...prev,
+              ...updatedData
+            }));
+          } else {
+            setError('Reservation no longer exists.');
+            setReservation(null);
+          }
+        }, (err) => {
+          console.error('Real-time listener error:', err);
+        });
+        
+        unsubscribeRef.current = unsubscribe;
         setLoading(false);
         return;
       }
       
-      const bookingDoc = querySnapshot.docs[0];
-      const bookingData = bookingDoc.data();
+      // If not found in room bookings, try day tour bookings
+      const dayTourBookingsRef = collection(db, 'dayTourBookings');
+      const dayTourQuery = query(
+        dayTourBookingsRef,
+        where('guestInfo.email', '==', email.toLowerCase().trim()),
+        where('bookingId', '==', referenceNumber.trim().toUpperCase())
+      );
       
-      // Set initial reservation data
-      setReservation({
-        id: bookingDoc.id,
-        ...bookingData
-      });
+      const dayTourSnapshot = await getDocs(dayTourQuery);
       
-      // Set up real-time listener for this specific booking document
-      const bookingRef = doc(db, 'bookings', bookingDoc.id);
-      const unsubscribe = onSnapshot(bookingRef, (docSnapshot) => {
-        if (docSnapshot.exists()) {
-          const updatedData = docSnapshot.data();
-          setReservation(prev => ({
-            ...prev,
-            ...updatedData
-          }));
-        } else {
-          // Document no longer exists
-          setError('Reservation no longer exists.');
-          setReservation(null);
-        }
-      }, (err) => {
-        console.error('Real-time listener error:', err);
-      });
+      if (!dayTourSnapshot.empty) {
+        const bookingDoc = dayTourSnapshot.docs[0];
+        const bookingData = bookingDoc.data();
+        
+        setReservationType('daytour');
+        setReservationId(bookingDoc.id);
+        setReservationCollection('dayTourBookings');
+        
+        setReservation({
+          id: bookingDoc.id,
+          ...bookingData,
+          type: 'daytour'
+        });
+        
+        // Set up real-time listener for this specific day tour booking document
+        const bookingRef = doc(db, 'dayTourBookings', bookingDoc.id);
+        const unsubscribe = onSnapshot(bookingRef, (docSnapshot) => {
+          if (docSnapshot.exists()) {
+            const updatedData = docSnapshot.data();
+            setReservation(prev => ({
+              ...prev,
+              ...updatedData
+            }));
+          } else {
+            setError('Reservation no longer exists.');
+            setReservation(null);
+          }
+        }, (err) => {
+          console.error('Real-time listener error:', err);
+        });
+        
+        unsubscribeRef.current = unsubscribe;
+        setLoading(false);
+        return;
+      }
       
-      unsubscribeRef.current = unsubscribe;
+      setError('No reservation found. Please check your details and try again.');
       
     } catch (err) {
       console.error('Error fetching reservation:', err);
@@ -110,23 +165,42 @@ export default function ReservationTrackerPage() {
     }
   };
 
-  const addCancellationNotification = async (booking) => {
-    try {
-      const cancellationsRef = collection(db, 'guest_cancellations');
-      await addDoc(cancellationsRef, {
-        guestName: `${booking.guestInfo?.firstName} ${booking.guestInfo?.lastName}`,
-        bookingId: booking.bookingId,
-        roomType: booking.roomType,
-        cancelledAt: new Date().toISOString(),
-        read: false,
-      });
-    } catch (err) {
-      console.error('Error adding cancellation notification:', err);
+const addCancellationNotification = async (booking, reason) => {
+  try {
+    const cancellationsRef = collection(db, 'guest_cancellations');
+    
+    // Create base notification data
+    const notificationData = {
+      guestName: `${booking.guestInfo?.firstName} ${booking.guestInfo?.lastName}`,
+      bookingId: booking.bookingId,
+      cancelledAt: new Date().toISOString(),
+      cancellationReason: reason,
+      read: false,
+      bookingType: booking.type || 'room'
+    };
+    
+    // Only add roomType for room bookings, add tourDate for day tour bookings
+    if (booking.type === 'daytour') {
+      notificationData.tourDate = booking.selectedDate;
+      notificationData.bookingTypeLabel = 'Day Tour';
+    } else {
+      notificationData.roomType = booking.roomType;
+      notificationData.bookingTypeLabel = 'Room';
     }
-  };
+    
+    await addDoc(cancellationsRef, notificationData);
+  } catch (err) {
+    console.error('Error adding cancellation notification:', err);
+  }
+};
 
   const handleCancelReservation = async () => {
     if (!reservation) return;
+    
+    if (!cancellationReason.trim()) {
+      setError('Please provide a reason for cancellation.');
+      return;
+    }
     
     if (reservation.status !== 'pending' && reservation.status !== 'confirmed') {
       setError('This reservation cannot be cancelled as it is no longer active.');
@@ -137,12 +211,14 @@ export default function ReservationTrackerPage() {
     setCancelling(true);
     
     try {
-      const bookingRef = doc(db, 'bookings', reservation.id);
+      const collectionName = reservation.type === 'daytour' ? 'dayTourBookings' : 'bookings';
+      const bookingRef = doc(db, collectionName, reservation.id);
+      
       await updateDoc(bookingRef, {
         status: 'cancelled-by-guest',
         cancelledAt: new Date().toISOString(),
         cancelledBy: 'guest',
-        cancellationReason: 'Cancelled by guest through reservation tracker',
+        cancellationReason: cancellationReason,
         updatedAt: new Date().toISOString()
       });
       
@@ -150,18 +226,22 @@ export default function ReservationTrackerPage() {
         ...reservation,
         status: 'cancelled-by-guest',
         cancelledAt: new Date().toISOString(),
-        cancelledBy: 'guest'
+        cancelledBy: 'guest',
+        cancellationReason: cancellationReason
       });
       
       setShowCancelModal(false);
+      setCancellationReason('');
       
-      // Add notification for admin
-      await addCancellationNotification(reservation);
+      // Add notification for admin with reason
+      await addCancellationNotification(reservation, cancellationReason);
       
-      // --- SEND CANCELLATION EMAIL TO GUEST ---
-      const cancellationReason = 'Cancelled by guest through reservation tracker';
-      await sendCancellationEmail(reservation, cancellationReason, 'guest');
-      // --- END EMAIL ---
+      // Send cancellation email based on reservation type
+      if (reservation.type === 'daytour') {
+        await sendDayTourCancellationEmail(reservation, cancellationReason, 'guest');
+      } else {
+        await sendCancellationEmail(reservation, cancellationReason, 'guest');
+      }
       
       setShowSuccessModal(true);
       
@@ -186,7 +266,7 @@ export default function ReservationTrackerPage() {
     }
   };
 
-  // Calculate number of nights between check-in and check-out
+  // Calculate number of nights between check-in and check-out (for room bookings)
   const calculateNumberOfNights = (checkIn, checkOut) => {
     if (!checkIn || !checkOut) return 'N/A';
     try {
@@ -251,23 +331,12 @@ export default function ReservationTrackerPage() {
     }
   };
 
-  const formatDateOnly = (timestamp) => {
-    if (!timestamp) return 'N/A';
+  const formatDateOnly = (dateString) => {
+    if (!dateString) return 'N/A';
     try {
-      let dateObj;
-      if (timestamp && typeof timestamp.toDate === 'function') {
-        dateObj = timestamp.toDate();
-      } else if (timestamp && typeof timestamp === 'object' && timestamp.seconds) {
-        dateObj = new Date(timestamp.seconds * 1000);
-      } else {
-        dateObj = new Date(timestamp);
-      }
-      
-      if (isNaN(dateObj.getTime())) {
-        return 'Invalid Date';
-      }
-      
-      return dateObj.toLocaleDateString('en-US', {
+      const date = new Date(dateString);
+      if (isNaN(date.getTime())) return 'Invalid Date';
+      return date.toLocaleDateString('en-US', {
         year: 'numeric',
         month: 'long',
         day: 'numeric'
@@ -314,11 +383,17 @@ export default function ReservationTrackerPage() {
     return status === 'pending' || status === 'confirmed';
   };
 
-  const numberOfNights = reservation ? calculateNumberOfNights(reservation.checkIn, reservation.checkOut) : 0;
+  const numberOfNights = reservation && reservation.type === 'room' ? calculateNumberOfNights(reservation.checkIn, reservation.checkOut) : 0;
+
+  // Calculate total guests for day tour
+  const getTotalGuests = () => {
+    if (!reservation) return 0;
+    return (reservation.seniors || 0) + (reservation.adults || 0) + (reservation.kids || 0);
+  };
 
   return (
     <GuestLayout>
-        <div suppressHydrationWarning className="min-h-screen bg-gradient-to-br from-ocean-ice to-blue-white py-12 px-2 md:px-4">
+      <div suppressHydrationWarning className="min-h-screen bg-gradient-to-br from-ocean-ice to-blue-white py-12 px-2 md:px-4">
         <div className="max-w-7xl mx-auto">
           {/* Header */}
           <div className="text-center mb-8">
@@ -359,7 +434,7 @@ export default function ReservationTrackerPage() {
                         type="text"
                         value={referenceNumber}
                         onChange={(e) => setReferenceNumber(e.target.value.toUpperCase())}
-                        placeholder="e.g., BOOK-1734567890123-456"
+                        placeholder="e.g., DAYTOUR-1734567890123-456 or BOOK-1734567890123-456"
                         className="w-full px-4 py-3 border-2 border-ocean-light/20 rounded-xl text-base focus:outline-none focus:border-ocean-light focus:ring-2 focus:ring-ocean-light/20 transition-all duration-300 font-mono pr-12"
                         disabled={loading}
                       />
@@ -412,7 +487,12 @@ export default function ReservationTrackerPage() {
                         <h2 className="text-2xl font-bold text-textPrimary font-playfair mb-1">
                           Reservation Details
                         </h2>
-                        <p className="text-sm text-neutral">Booking ID: {reservation.bookingId}</p>
+                        <div className="flex items-center gap-2">
+                          <p className="text-sm text-neutral">Booking ID: {reservation.bookingId}</p>
+                          <span className={`text-xs px-2 py-0.5 rounded-full ${reservation.type === 'daytour' ? 'bg-ocean-ice text-ocean-mid' : 'bg-ocean-ice text-ocean-mid'}`}>
+                            {reservation.type === 'daytour' ? 'Day Tour' : 'Room Reservation'}
+                          </span>
+                        </div>
                       </div>
                       {getStatusBadge(reservation.status)}
                     </div>
@@ -421,8 +501,13 @@ export default function ReservationTrackerPage() {
                       <div className="mt-3 p-3 bg-red-50 rounded-lg border border-red-200">
                         <p className="text-red-700 text-sm">
                           <i className="fas fa-info-circle mr-2"></i>
-                          This reservation was cancelled by the guest. 50% of the down payment has been retained by the resort.
+                          This reservation was cancelled by the guest. 
                         </p>
+                        {reservation.cancellationReason && (
+                          <p className="text-red-700 text-sm mt-2">
+                            <strong>Cancellation Reason:</strong> {reservation.cancellationReason}
+                          </p>
+                        )}
                       </div>
                     )}
                     
@@ -435,7 +520,7 @@ export default function ReservationTrackerPage() {
                       </div>
                     )}
 
-                    {/* Cancel Button */}
+                    {/* Cancel Button - Only show for active reservations */}
                     {canCancel(reservation.status) && (
                       <div className="mt-6 flex justify-end">
                         <button
@@ -477,49 +562,73 @@ export default function ReservationTrackerPage() {
                     </div>
                   </div>
 
-                  {/* Booking Schedule */}
+                  {/* Booking Schedule - Different for Room vs Day Tour */}
                   <div className="bg-white rounded-2xl shadow-md border border-ocean-light/10 p-6">
                     <h3 className="text-lg font-bold text-textPrimary mb-4 flex items-center gap-2">
                       <i className="fas fa-calendar-alt text-ocean-light"></i>
-                      Booking Schedule
+                      {reservation.type === 'daytour' ? 'Tour Schedule' : 'Booking Schedule'}
                     </h3>
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                      <div>
-                        <p className="text-xs font-semibold text-neutral uppercase tracking-wide">Check-in Date & Time</p>
-                        <p className="text-textPrimary font-medium">{formatDateTime(reservation.checkIn)}</p>
+                    
+                    {reservation.type === 'daytour' ? (
+                      // Day Tour Schedule
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <div>
+                          <p className="text-xs font-semibold text-neutral uppercase tracking-wide">Tour Date</p>
+                          <p className="text-textPrimary font-medium">{formatDateOnly(reservation.selectedDate)}</p>
+                        </div>
+                        <div>
+                          <p className="text-xs font-semibold text-neutral uppercase tracking-wide">Total Guests</p>
+                          <p className="text-textPrimary font-medium">{getTotalGuests()}</p>
+                        </div>
+                        <div>
+                          <p className="text-xs font-semibold text-neutral uppercase tracking-wide">Guest Breakdown</p>
+                          <p className="text-textPrimary font-medium">
+                            Senior: {reservation.seniors || 0} | Adult: {reservation.adults || 0} | Kid: {reservation.kids || 0}
+                          </p>
+                        </div>
                       </div>
-                      <div>
-                        <p className="text-xs font-semibold text-neutral uppercase tracking-wide">Check-out Date & Time</p>
-                        <p className="text-textPrimary font-medium">{formatDateTime(reservation.checkOut)}</p>
+                    ) : (
+                      // Room Booking Schedule
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <div>
+                          <p className="text-xs font-semibold text-neutral uppercase tracking-wide">Check-in Date & Time</p>
+                          <p className="text-textPrimary font-medium">{formatDateTime(reservation.checkIn)}</p>
+                        </div>
+                        <div>
+                          <p className="text-xs font-semibold text-neutral uppercase tracking-wide">Check-out Date & Time</p>
+                          <p className="text-textPrimary font-medium">{formatDateTime(reservation.checkOut)}</p>
+                        </div>
+                        <div>
+                          <p className="text-xs font-semibold text-neutral uppercase tracking-wide">Number of Nights</p>
+                          <p className="text-textPrimary font-medium">{numberOfNights} {numberOfNights === 1 ? 'night' : 'nights'}</p>
+                        </div>
+                        <div>
+                          <p className="text-xs font-semibold text-neutral uppercase tracking-wide">Number of Guests</p>
+                          <p className="text-textPrimary font-medium">{reservation.guests}</p>
+                        </div>
                       </div>
-                      <div>
-                        <p className="text-xs font-semibold text-neutral uppercase tracking-wide">Number of Nights</p>
-                        <p className="text-textPrimary font-medium">{numberOfNights} {numberOfNights === 1 ? 'night' : 'nights'}</p>
-                      </div>
-                    </div>
+                    )}
                   </div>
 
-                  {/* Room Details */}
-                  <div className="bg-white rounded-2xl shadow-md border border-ocean-light/10 p-6">
-                    <h3 className="text-lg font-bold text-textPrimary mb-4 flex items-center gap-2">
-                      <i className="fas fa-bed text-ocean-light"></i>
-                      Room Details
-                    </h3>
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                      <div>
-                        <p className="text-xs font-semibold text-neutral uppercase tracking-wide">Room Type</p>
-                        <p className="text-textPrimary font-medium">{reservation.roomType}</p>
-                      </div>
-                      <div>
-                        <p className="text-xs font-semibold text-neutral uppercase tracking-wide">Number of Rooms</p>
-                        <p className="text-textPrimary font-medium">{reservation.numberOfRooms || 1}</p>
-                      </div>
-                      <div>
-                        <p className="text-xs font-semibold text-neutral uppercase tracking-wide">Number of Guests</p>
-                        <p className="text-textPrimary font-medium">{reservation.guests}</p>
+                  {/* Room Details - Only for Room Reservations */}
+                  {reservation.type === 'room' && (
+                    <div className="bg-white rounded-2xl shadow-md border border-ocean-light/10 p-6">
+                      <h3 className="text-lg font-bold text-textPrimary mb-4 flex items-center gap-2">
+                        <i className="fas fa-bed text-ocean-light"></i>
+                        Room Details
+                      </h3>
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <div>
+                          <p className="text-xs font-semibold text-neutral uppercase tracking-wide">Room Type</p>
+                          <p className="text-textPrimary font-medium">{reservation.roomType}</p>
+                        </div>
+                        <div>
+                          <p className="text-xs font-semibold text-neutral uppercase tracking-wide">Number of Rooms</p>
+                          <p className="text-textPrimary font-medium">{reservation.numberOfRooms || 1}</p>
+                        </div>
                       </div>
                     </div>
-                  </div>
+                  )}
 
                   {/* Payment Summary */}
                   <div className="bg-white rounded-2xl shadow-md border border-ocean-light/10 p-6">
@@ -565,7 +674,7 @@ export default function ReservationTrackerPage() {
             </div>
           </div>
 
-          {/* Cancel Reservation Modal */}
+          {/* Cancel Reservation Modal with Reason Input */}
           {showCancelModal && (
             <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
               <div className="bg-white rounded-2xl w-full max-w-md p-6 shadow-2xl animate-scaleIn">
@@ -573,35 +682,59 @@ export default function ReservationTrackerPage() {
                   <div className="w-14 h-14 mx-auto mb-3 rounded-full bg-red-100 flex items-center justify-center">
                     <i className="fas fa-exclamation-triangle text-red-500 text-2xl"></i>
                   </div>
-                  <h3 className="text-lg font-bold text-textPrimary mb-2">Cancel Reservation</h3>
-                  <div className="bg-yellow-50 border-l-4 border-yellow-500 p-3 mb-3 rounded">
+                  <h3 className="text-lg font-bold text-textPrimary mb-2">Cancel {reservation?.type === 'daytour' ? 'Day Tour' : 'Room'} Reservation</h3>
+                  <div className="bg-yellow-50 p-3 mb-3 rounded">
                     <p className="text-sm text-yellow-800">
                       <i className="fas fa-info-circle mr-2"></i>
                       <span className="font-semibold">Important Note:</span> 50% of the down payment will be retained by the resort upon cancellation.
                     </p>
                   </div>
                   <p className="text-textSecondary text-sm">
-                    Are you sure you want to cancel your reservation for{" "}
+                    Are you sure you want to cancel your {reservation?.type === 'daytour' ? 'day tour' : 'room'} reservation for{" "}
                     <span className="font-semibold text-textPrimary">
                       {reservation?.guestInfo?.firstName} {reservation?.guestInfo?.lastName}
                     </span>?<br />
                     <span className="text-xs mt-1 block">
-                      Booking ID: {reservation?.bookingId}<br />
-                      Room: {reservation?.roomType}<br />
-                      Dates: {formatDateOnly(reservation?.checkIn)} - {formatDateOnly(reservation?.checkOut)}
+                      Booking ID: {reservation?.bookingId}
+                      {reservation?.type === 'room' ? (
+                        <><br />Room: {reservation?.roomType}<br />Dates: {formatDateOnly(reservation?.checkIn)} - {formatDateOnly(reservation?.checkOut)}</>
+                      ) : (
+                        <><br />Tour Date: {formatDateOnly(reservation?.selectedDate)}</>
+                      )}
                     </span>
                   </p>
                 </div>
+                
+                {/* Reason Input */}
+                <div className="mb-5">
+                  <label className="block text-sm font-semibold text-textPrimary mb-2">
+                    Cancellation Reason <span className="text-red-500">*</span>
+                  </label>
+                  <textarea
+                    value={cancellationReason}
+                    onChange={(e) => setCancellationReason(e.target.value)}
+                    placeholder="Please provide a reason for your cancellation. If you accidentally selected the wrong date, you may indicate your preferred new date instead."
+                    rows="3"
+                    className="w-full px-3 py-2 border-2 border-ocean-light/20 rounded-xl text-sm focus:outline-none focus:border-red-300 focus:ring-2 focus:ring-red-200 transition-all duration-300 bg-white resize-none"
+                  ></textarea>
+                  <p className="text-xs text-textSecondary mt-1">
+                    This helps us improve our services.
+                  </p>
+                </div>
+                
                 <div className="flex gap-3 justify-center">
                   <button
-                    onClick={() => setShowCancelModal(false)}
+                    onClick={() => {
+                      setShowCancelModal(false);
+                      setCancellationReason('');
+                    }}
                     className="px-5 py-2 border border-ocean-light/20 rounded-xl text-textSecondary text-sm font-medium hover:bg-ocean-ice transition-all duration-300"
                   >
                     Go Back
                   </button>
                   <button
                     onClick={handleCancelReservation}
-                    disabled={cancelling}
+                    disabled={cancelling || !cancellationReason.trim()}
                     className="px-5 py-2 bg-gradient-to-r from-red-500 to-red-600 rounded-xl text-white text-sm font-medium hover:shadow-lg hover:-translate-y-0.5 transition-all duration-300 disabled:opacity-50 disabled:cursor-not-allowed"
                   >
                     {cancelling ? (
@@ -628,7 +761,7 @@ export default function ReservationTrackerPage() {
                   </div>
                   <h3 className="text-lg font-bold text-textPrimary mb-2">Reservation Cancelled</h3>
                   <p className="text-textSecondary text-sm">
-                    Your reservation has been successfully cancelled. Please note that 50% of the down payment will be retained by the resort.
+                    Your {reservation?.type === 'daytour' ? 'day tour' : 'room'} reservation has been successfully cancelled. 
                   </p>
                 </div>
                 <div className="flex justify-center">

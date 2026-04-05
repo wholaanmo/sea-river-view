@@ -1,8 +1,8 @@
-// app/api/admin/send-refund-notification/route.js
+// app/api/admin/send-move-date-notification/route.js
 import { NextResponse } from 'next/server';
 import { db } from '../../../../lib/firebase';
 import { doc, getDoc } from 'firebase/firestore';
-import { sendRefundNotificationEmail } from '../../../../lib/emailService';
+import { sendMoveDateNotificationEmail } from '../../../../lib/emailService';
 
 export async function POST(request) {
   try {
@@ -25,21 +25,16 @@ export async function POST(request) {
 
     const booking = { id: bookingSnap.id, ...bookingSnap.data() };
 
-    // Verify status is 'cancelled-by-guest'
-    if (booking.status !== 'cancelled-by-guest') {
-      return NextResponse.json({ error: 'Refund can only be sent for guest-cancelled reservations' }, { status: 400 });
-    }
-
     // Send email
-    const result = await sendRefundNotificationEmail(booking);
+    const result = await sendMoveDateNotificationEmail(booking);
 
     if (result.success) {
-      return NextResponse.json({ message: 'Refund notification email sent successfully' });
+      return NextResponse.json({ message: 'Move date notification email sent successfully' });
     } else {
       return NextResponse.json({ error: result.error || 'Failed to send email' }, { status: 500 });
     }
   } catch (error) {
-    console.error('Refund notification error:', error);
+    console.error('Move date notification error:', error);
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
   }
 }

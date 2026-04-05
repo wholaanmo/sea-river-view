@@ -580,34 +580,6 @@ const getDateStatus = (date) => {
           <h1 className="text-3xl font-bold text-textPrimary font-playfair mb-1">Calendar Management</h1>
           <p className="text-textSecondary">Manage room availability (block ranges, add reasons)</p>
         </div>
-        <div className="flex items-center gap-4">
-          <Link
-            href={`/rooms?roomId=${selectedRoomId}&adminMode=true`}
-            target="_blank"
-            className="flex items-center gap-2 px-5 py-2.5 bg-gradient-to-r from-blue-500 to-indigo-600 text-white rounded-xl font-medium shadow-lg hover:shadow-xl hover:-translate-y-0.5 transition-all duration-300"
-          >
-            <i className="fas fa-user-plus text-sm"></i> Book for Guest
-          </Link>
-          <div className="flex items-center gap-3">
-            <label className="text-sm font-medium text-textPrimary">Select Room Type:</label>
-            <select
-              value={selectedRoomId}
-              onChange={(e) => {
-                setSelectedRoomId(e.target.value);
-                setSelectedStartDate(null);
-                setSelectedStartTime('');
-                setSelectedEndDate(null);
-                setSelectedEndTime('');
-                setUnitsToBlock(1);
-              }}
-              className="px-4 py-2 border border-ocean-light/20 rounded-xl text-sm focus:outline-none focus:border-ocean-light bg-white"
-            >
-              {rooms.map(room => (
-                <option key={room.id} value={room.id}>{room.type || room.name || room.id}</option>
-              ))}
-            </select>
-          </div>
-        </div>
       </div>
 
       {/* Main two-column layout */}
@@ -716,6 +688,34 @@ const getDateStatus = (date) => {
 
         {/* Management Panel (40%) */}
         <div className="xl:w-[40%] space-y-6">
+           <div className="flex items-center gap-4">
+          <Link
+            href={`/rooms?roomId=${selectedRoomId}&adminMode=true`}
+            target="_blank"
+            className="flex items-center gap-2 px-5 py-2.5 bg-gradient-to-r from-blue-500 to-indigo-600 text-white rounded-xl font-medium shadow-lg hover:shadow-xl hover:-translate-y-0.5 transition-all duration-300"
+          >
+            <i className="fas fa-user-plus text-sm"></i> Book for Guest
+          </Link>
+          <div className="flex items-center gap-3">
+            <label className="text-sm font-medium text-textPrimary">Select Room Type:</label>
+            <select
+              value={selectedRoomId}
+              onChange={(e) => {
+                setSelectedRoomId(e.target.value);
+                setSelectedStartDate(null);
+                setSelectedStartTime('');
+                setSelectedEndDate(null);
+                setSelectedEndTime('');
+                setUnitsToBlock(1);
+              }}
+              className="px-4 py-2 border border-ocean-light/20 rounded-xl text-sm focus:outline-none focus:border-ocean-light bg-white"
+            >
+              {rooms.map(room => (
+                <option key={room.id} value={room.id}>{room.type || room.name || room.id}</option>
+              ))}
+            </select>
+          </div>
+        </div>
           {/* Main Management Panel */}
           <div className="bg-white rounded-2xl shadow-lg border border-ocean-light/10 p-5">
             <h3 className="text-lg font-bold text-textPrimary mb-4 flex items-center gap-2">
