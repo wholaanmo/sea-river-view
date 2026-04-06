@@ -3,7 +3,7 @@
 
 import { useState, useEffect } from 'react';
 import { db } from '../../../../lib/firebase';
-import { collection, addDoc, updateDoc, doc, query, orderBy, onSnapshot, where } from 'firebase/firestore';
+import { collection, addDoc, updateDoc, doc, query, orderBy, onSnapshot, where, getDocs } from 'firebase/firestore';
 import { uploadImage } from '../../../../lib/cloudinary';
 import { logAdminAction } from '../../../../lib/auditLogger';
 import Image from 'next/image';
@@ -88,27 +88,28 @@ export default function AdminDayTour() {
   };
   
   // Real-time listener for day tours (only get the first non-archived one)
-  useEffect(() => {
-    const toursRef = collection(db, 'dayTours');
-    const q = query(toursRef, where('archived', '!=', true), orderBy('createdAt', 'desc'));
-    
-    const unsubscribe = onSnapshot(q, (querySnapshot) => {
-      const toursList = [];
-      querySnapshot.forEach((doc) => {
-        toursList.push({
-          id: doc.id,
-          ...doc.data()
-        });
+useEffect(() => {
+  const toursRef = collection(db, 'dayTours');
+  // Changed from 'archived', '!=', true to 'archived', '==', false for clarity
+  const q = query(toursRef, where('archived', '==', false), orderBy('createdAt', 'desc'));
+  
+  const unsubscribe = onSnapshot(q, (querySnapshot) => {
+    const toursList = [];
+    querySnapshot.forEach((doc) => {
+      toursList.push({
+        id: doc.id,
+        ...doc.data()
       });
-      // Only keep the first tour (since only one is allowed)
-      setDayTour(toursList[0] || null);
-    }, (error) => {
-      console.error('Error fetching day tours:', error);
-      showNotification('Failed to load day tours.', 'error');
     });
-    
-    return () => unsubscribe();
-  }, []);
+    // Only keep the first tour (since only one is allowed)
+    setDayTour(toursList[0] || null);
+  }, (error) => {
+    console.error('Error fetching day tours:', error);
+    showNotification('Failed to load day tours.', 'error');
+  });
+  
+  return () => unsubscribe();
+}, []);
   
   // Real-time listener for activities (only show non-archived)
   useEffect(() => {
@@ -277,54 +278,65 @@ export default function AdminDayTour() {
     return !tourFormData.adultPrice || !tourFormData.kidPrice || !tourFormData.seniorPrice || !tourFormData.description.trim();
   };
   
-  const handleAddTour = async (e) => {
-    e.preventDefault();
-    const errors = validateTourForm();
+ const handleAddTour = async (e) => {
+  e.preventDefault();
+  const errors = validateTourForm();
+  
+  if (Object.keys(errors).length > 0) {
+    setTourFormErrors(errors);
+    return;
+  }
+  
+  setActionLoading(true);
+  
+  try {
+    // Check if a day tour already exists (not archived)
+const toursRef = collection(db, 'dayTours');
+const activeToursQuery = query(toursRef, where('archived', '==', false));
+const activeToursSnapshot = await getDocs(activeToursQuery);
+
+if (!activeToursSnapshot.empty) {
+  showNotification('Cannot create: A day tour already exists. Only one day tour post is allowed at a time. Please archive the existing day tour first.', 'error');
+  setActionLoading(false);
+  return;
+}
     
-    if (Object.keys(errors).length > 0) {
-      setTourFormErrors(errors);
-      return;
-    }
+    const tourData = {
+      adultPrice: parseFloat(tourFormData.adultPrice),
+      kidPrice: parseFloat(tourFormData.kidPrice),
+      seniorPrice: parseFloat(tourFormData.seniorPrice),
+      maxCapacity: tourFormData.maxCapacity ? parseInt(tourFormData.maxCapacity) : null,
+      availability: tourFormData.availability,
+      images: tourFormData.images,
+      inclusions: tourFormData.inclusions,
+      description: tourFormData.description,
+      archived: false,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString()
+    };
     
-    setActionLoading(true);
+    await addDoc(collection(db, 'dayTours'), tourData);
     
-    try {
-      const tourData = {
-        adultPrice: parseFloat(tourFormData.adultPrice),
-        kidPrice: parseFloat(tourFormData.kidPrice),
-        seniorPrice: parseFloat(tourFormData.seniorPrice),
-        maxCapacity: tourFormData.maxCapacity ? parseInt(tourFormData.maxCapacity) : null,
-        availability: tourFormData.availability,
-        images: tourFormData.images,
-        inclusions: tourFormData.inclusions,
-        description: tourFormData.description,
-        archived: false,
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString()
-      };
-      
-      await addDoc(collection(db, 'dayTours'), tourData);
-      
-      await logAdminAction({
-        action: 'Created Day Tour',
-        module: 'Day Tour Management',
-        details: `Added new day tour (Adult: ₱${parseFloat(tourFormData.adultPrice).toLocaleString()}, Kid: ₱${parseFloat(tourFormData.kidPrice).toLocaleString()}, Senior: ₱${parseFloat(tourFormData.seniorPrice).toLocaleString()}, Capacity: ${tourFormData.maxCapacity || 'Unlimited'}, Status: ${tourFormData.availability})`
-      });
-      
-      showNotification('Day tour added successfully!');
-      resetTourForm();
-      
-      setTimeout(() => {
-        setShowTourModal(false);
-      }, 2000);
-      
-    } catch (error) {
-      console.error('Error adding day tour:', error);
-      showNotification('Failed to add day tour.', 'error');
-    } finally {
-      setActionLoading(false);
-    }
-  };
+    await logAdminAction({
+      action: 'Created Day Tour',
+      module: 'Day Tour Management',
+      details: `Added new day tour (Adult: ₱${parseFloat(tourFormData.adultPrice).toLocaleString()}, Kid: ₱${parseFloat(tourFormData.kidPrice).toLocaleString()}, Senior: ₱${parseFloat(tourFormData.seniorPrice).toLocaleString()}, Capacity: ${tourFormData.maxCapacity || 'Unlimited'}, Status: ${tourFormData.availability})`
+    });
+    
+    showNotification('Day tour added successfully!');
+    resetTourForm();
+    
+    setTimeout(() => {
+      setShowTourModal(false);
+    }, 2000);
+    
+  } catch (error) {
+    console.error('Error adding day tour:', error);
+    showNotification('Failed to add day tour.', 'error');
+  } finally {
+    setActionLoading(false);
+  }
+};
   
   const handleUpdateTour = async (e) => {
     e.preventDefault();

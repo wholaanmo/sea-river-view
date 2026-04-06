@@ -3,7 +3,7 @@
 
 import { useState, useEffect } from 'react';
 import { db } from '../../../../lib/firebase';
-import { collection, query, orderBy, onSnapshot, where, updateDoc, doc, deleteDoc, setDoc, getDoc } from 'firebase/firestore';
+import { collection, query, orderBy, onSnapshot, where, updateDoc, doc, deleteDoc, getDocs, getDoc } from 'firebase/firestore';
 import { logAdminAction } from '../../../../lib/auditLogger';
 import Image from 'next/image';
 import { useRouter } from 'next/navigation';
@@ -19,6 +19,7 @@ export default function ArchivePage() {
   const [notification, setNotification] = useState({ show: false, message: '', type: '' });
   const [restoreModal, setRestoreModal] = useState({ show: false, item: null, type: '' });
   const [deleteModal, setDeleteModal] = useState({ show: false, item: null, type: '' });
+  const [archivedGCashQRs, setArchivedGCashQRs] = useState([]);
   const router = useRouter();
 
   // Real-time listener for archived rooms
@@ -89,28 +90,51 @@ export default function ArchivePage() {
     return () => unsubscribe();
   }, []);
   
-  // Real-time listener for archived bank accounts
+  // Real-time listener for archived bank accounts (single correct version)
   useEffect(() => {
-    const archivedBankRef = collection(db, 'archived_bank_accounts');
-    const q = query(archivedBankRef, orderBy('archivedAt', 'desc'));
+    const bankAccountsRef = collection(db, 'bank_accounts');
+    const q = query(bankAccountsRef, where('archived', '==', true), orderBy('archivedAt', 'desc'));
     
     const unsubscribe = onSnapshot(q, (querySnapshot) => {
       const accountsList = [];
       querySnapshot.forEach((doc) => {
         accountsList.push({
-          id: doc.id,
+          firestoreId: doc.id, // Store the actual Firestore document ID
           ...doc.data()
         });
       });
       setArchivedBankAccounts(accountsList);
+      setLoading(false);
     }, (error) => {
       console.error('Error fetching archived bank accounts:', error);
       showNotification('Failed to load archived bank accounts.', 'error');
+      setLoading(false);
     });
     
     return () => unsubscribe();
   }, []);
+
+  useEffect(() => {
+  const archivedQRRef = collection(db, 'archived_gcash_qr');
+  const q = query(archivedQRRef, orderBy('archivedAt', 'desc'));
   
+  const unsubscribe = onSnapshot(q, (querySnapshot) => {
+    const qrList = [];
+    querySnapshot.forEach((doc) => {
+      qrList.push({
+        firestoreId: doc.id,
+        ...doc.data()
+      });
+    });
+    setArchivedGCashQRs(qrList);
+  }, (error) => {
+    console.error('Error fetching archived GCash QR codes:', error);
+    showNotification('Failed to load archived GCash QR codes.', 'error');
+  });
+  
+  return () => unsubscribe();
+}, []);
+
   // Auto-hide notification
   useEffect(() => {
     if (notification.show) {
@@ -125,114 +149,165 @@ export default function ArchivePage() {
     setNotification({ show: true, message, type });
   };
   
-  const handleRestore = async () => {
-    if (!restoreModal.item) return;
-    
-    try {
-      if (restoreModal.type === 'bankaccount') {
-        // Restore bank account: move from archived_bank_accounts to active bank accounts in settings
-        const settingsRef = doc(db, 'settings', 'payment');
-        const settingsDoc = await getDoc(settingsRef);
-        const currentBankAccounts = settingsDoc.exists() ? (settingsDoc.data().bankAccounts || []) : [];
-        
-        // Remove archived flag and add back to active accounts
-        const restoredAccount = {
-          ...restoreModal.item,
-          restoredAt: new Date().toISOString(),
-          // Remove archived-specific fields if any
-        };
-        delete restoredAccount.archivedAt;
-        delete restoredAccount.archivedBy;
-        delete restoredAccount.id; // let Firestore generate new id or keep same? We'll keep same id but ensure no duplicate
-        // Use the same id if it exists, otherwise generate new
-        const newAccount = {
-          id: restoreModal.item.id, // reuse the id
-          bankName: restoreModal.item.bankName,
-          accountName: restoreModal.item.accountName,
-          accountNumber: restoreModal.item.accountNumber,
-          createdAt: restoreModal.item.createdAt || new Date().toISOString(),
-          restoredAt: new Date().toISOString()
-        };
-        
-        const updatedBankAccounts = [...currentBankAccounts, newAccount];
-        await setDoc(settingsRef, {
-          bankAccounts: updatedBankAccounts,
-          updatedAt: new Date().toISOString()
-        }, { merge: true });
-        
-        // Delete from archived collection
-        const archivedRef = doc(db, 'archived_bank_accounts', restoreModal.item.id);
-        await deleteDoc(archivedRef);
-        
-        await logAdminAction({
-          action: 'Restored Bank Account',
-          module: 'Archive',
-          details: `Restored bank account: ${restoreModal.item.bankName} - ${restoreModal.item.accountName}`
-        });
-        
-        showNotification(`${restoreModal.item.bankName} has been restored successfully!`);
-      } else {
-        // Restore rooms, day tours, activities
-        const collectionName = restoreModal.type === 'room' ? 'rooms' : 
-                               restoreModal.type === 'daytour' ? 'dayTours' : 'activities';
-        const itemRef = doc(db, collectionName, restoreModal.item.id);
-        const itemName = restoreModal.item.name || restoreModal.item.type || restoreModal.item.name;
-        const itemType = restoreModal.type;
-        
-        await updateDoc(itemRef, {
-          archived: false,
-          restoredAt: new Date().toISOString()
-        });
-        
-        await logAdminAction({
-          action: 'Restored Item',
-          module: 'Archive',
-          details: `Restored ${itemType}: ${itemName}`
-        });
-        
-        showNotification(`${itemName} has been restored successfully!`);
-      }
-      setRestoreModal({ show: false, item: null, type: '' });
-    } catch (error) {
-      console.error('Error restoring item:', error);
-      showNotification('Failed to restore item.', 'error');
-    }
-  };
+const handleRestore = async () => {
+  if (!restoreModal.item) return;
   
-  const handleDelete = async () => {
-    if (!deleteModal.item) return;
-    
-    try {
-      let collectionName;
-      let itemName;
-      
-      if (deleteModal.type === 'bankaccount') {
-        collectionName = 'archived_bank_accounts';
-        itemName = `${deleteModal.item.bankName} - ${deleteModal.item.accountName}`;
-      } else {
-        collectionName = deleteModal.type === 'room' ? 'rooms' : 
-                         deleteModal.type === 'daytour' ? 'dayTours' : 'activities';
-        itemName = deleteModal.item.name || deleteModal.item.type || deleteModal.item.name;
-      }
-      
-      const itemRef = doc(db, collectionName, deleteModal.item.id);
-      await deleteDoc(itemRef);
-      
-      const itemType = deleteModal.type === 'bankaccount' ? 'bank account' : deleteModal.type;
-      
-      await logAdminAction({
-        action: 'Deleted Item',
-        module: 'Archive',
-        details: `Permanently deleted ${itemType}: ${itemName}`
+  try {
+    if (restoreModal.type === 'bankaccount') {
+      // Restore bank account: set archived to false and remove archivedAt
+      const bankRef = doc(db, 'bank_accounts', restoreModal.item.firestoreId);
+      await updateDoc(bankRef, {
+        archived: false,
+        archivedAt: null
       });
       
-      showNotification(`${itemName} has been permanently deleted!`);
-      setDeleteModal({ show: false, item: null, type: '' });
-    } catch (error) {
-      console.error('Error deleting item:', error);
-      showNotification('Failed to delete item.', 'error');
+      await logAdminAction({
+        action: 'Restored Bank Account',
+        module: 'Archive',
+        details: `Restored bank account: ${restoreModal.item.bankName} - ${restoreModal.item.accountName}`
+      });
+      
+      showNotification(`${restoreModal.item.bankName} has been restored successfully!`);
+    } else if (restoreModal.type === 'gcashqr') {
+      // Check if a QR code already exists in payment settings
+      const settingsRef = doc(db, 'settings', 'payment');
+      const settingsDoc = await getDoc(settingsRef);
+      const currentQRCode = settingsDoc.exists() ? settingsDoc.data().gcashQRCode : '';
+      
+      if (currentQRCode && currentQRCode !== '') {
+        showNotification('Cannot restore: A GCash QR code already exists in payment settings. Only one QR code is allowed at a time.', 'error');
+        setRestoreModal({ show: false, item: null, type: '' });
+        return;
+      }
+      
+      // Restore GCash QR code to payment settings
+      await setDoc(settingsRef, {
+        gcashQRCode: restoreModal.item.qrCodeUrl,
+        updatedAt: new Date().toISOString()
+      }, { merge: true });
+      
+      // Delete from archived collection
+      const archivedQRRef = doc(db, 'archived_gcash_qr', restoreModal.item.firestoreId);
+      await deleteDoc(archivedQRRef);
+      
+      await logAdminAction({
+        action: 'Restored GCash QR Code',
+        module: 'Archive',
+        details: 'Admin restored a GCash QR code from archive'
+      });
+      
+      showNotification('GCash QR code has been restored successfully!');
+    } else if (restoreModal.type === 'daytour') {
+      // Check if a day tour already exists (not archived)
+      const toursRef = collection(db, 'dayTours');
+      const activeToursQuery = query(toursRef, where('archived', '==', false));
+      const activeToursSnapshot = await getDocs(activeToursQuery);
+      
+      if (!activeToursSnapshot.empty) {
+        showNotification('Cannot restore: A day tour already exists. Only one day tour post is allowed at a time. Please archive or delete the existing day tour first.', 'error');
+        setRestoreModal({ show: false, item: null, type: '' });
+        return;
+      }
+      
+      // Restore day tour: set archived to false and remove archivedAt
+      const tourRef = doc(db, 'dayTours', restoreModal.item.id);
+      await updateDoc(tourRef, {
+        archived: false,
+        archivedAt: null,
+        restoredAt: new Date().toISOString()
+      });
+      
+      await logAdminAction({
+        action: 'Restored Day Tour',
+        module: 'Archive',
+        details: `Restored day tour: ${restoreModal.item.name || 'Day Tour'}`
+      });
+      
+      showNotification('Day tour has been restored successfully!');
+    } else {
+      // Restore rooms, activities
+      const collectionName = restoreModal.type === 'room' ? 'rooms' : 'activities';
+      const itemRef = doc(db, collectionName, restoreModal.item.id);
+      const itemName = restoreModal.item.name || restoreModal.item.type || restoreModal.item.name;
+      const itemType = restoreModal.type;
+      
+      await updateDoc(itemRef, {
+        archived: false,
+        restoredAt: new Date().toISOString()
+      });
+      
+      await logAdminAction({
+        action: 'Restored Item',
+        module: 'Archive',
+        details: `Restored ${itemType}: ${itemName}`
+      });
+      
+      showNotification(`${itemName} has been restored successfully!`);
     }
-  };
+    setRestoreModal({ show: false, item: null, type: '' });
+  } catch (error) {
+    console.error('Error restoring item:', error);
+    showNotification('Failed to restore item.', 'error');
+  }
+};
+  
+const handleDelete = async () => {
+  if (!deleteModal.item) return;
+  
+  try {
+    let collectionName;
+    let itemName;
+    let itemRef;
+    
+    if (deleteModal.type === 'bankaccount') {
+      // Use the firestoreId for bank accounts
+      collectionName = 'bank_accounts';
+      itemName = `${deleteModal.item.bankName} - ${deleteModal.item.accountName}`;
+      itemRef = doc(db, collectionName, deleteModal.item.firestoreId);
+    } else if (deleteModal.type === 'gcashqr') {
+      // Handle GCash QR code deletion
+      collectionName = 'archived_gcash_qr';
+      itemName = 'GCash QR Code';
+      itemRef = doc(db, collectionName, deleteModal.item.firestoreId);
+    } else {
+      collectionName = deleteModal.type === 'room' ? 'rooms' : 
+                       deleteModal.type === 'daytour' ? 'dayTours' : 'activities';
+      itemName = deleteModal.item.name || deleteModal.item.type || deleteModal.item.name;
+      itemRef = doc(db, collectionName, deleteModal.item.id);
+    }
+    
+    await deleteDoc(itemRef);
+    
+    // Immediately remove from local state (for instant UI update)
+    if (deleteModal.type === 'bankaccount') {
+      setArchivedBankAccounts(prev => prev.filter(acc => acc.firestoreId !== deleteModal.item.firestoreId));
+    } else if (deleteModal.type === 'gcashqr') {
+      setArchivedGCashQRs(prev => prev.filter(qr => qr.firestoreId !== deleteModal.item.firestoreId));
+    } else if (deleteModal.type === 'room') {
+      setArchivedRooms(prev => prev.filter(room => room.id !== deleteModal.item.id));
+    } else if (deleteModal.type === 'daytour') {
+      setArchivedDayTours(prev => prev.filter(tour => tour.id !== deleteModal.item.id));
+    } else if (deleteModal.type === 'activity') {
+      setArchivedActivities(prev => prev.filter(act => act.id !== deleteModal.item.id));
+    }
+    
+    const itemType = deleteModal.type === 'bankaccount' ? 'bank account' : 
+                     deleteModal.type === 'gcashqr' ? 'GCash QR code' : 
+                     deleteModal.type;
+    
+    await logAdminAction({
+      action: 'Deleted Item',
+      module: 'Archive',
+      details: `Permanently deleted ${itemType}: ${itemName}`
+    });
+    
+    showNotification(`${itemName} has been permanently deleted!`);
+    setDeleteModal({ show: false, item: null, type: '' });
+  } catch (error) {
+    console.error('Error deleting item:', error);
+    showNotification('Failed to delete item.', 'error');
+  }
+};
   
   const getRoomAvailabilityStyle = (availability) => {
     const styles = {
@@ -291,6 +366,10 @@ export default function ArchivePage() {
     return matchesSearch;
   });
   
+  const filteredGCashQRs = archivedGCashQRs.filter(qr => {
+  return true; // No search filter needed for QR codes
+});
+
   const getPricingLabel = (pricingType) => {
     if (pricingType === 'per_person') return 'Per Person';
     if (pricingType === 'promo') return 'Promo';
@@ -367,6 +446,17 @@ export default function ArchivePage() {
           <i className="fas fa-university mr-2"></i>
           Archived Bank Accounts
         </button>
+        <button
+  onClick={() => setActiveTab('gcashqr')}
+  className={`px-6 py-3 font-medium transition-all duration-200 whitespace-nowrap ${
+    activeTab === 'gcashqr'
+      ? 'text-ocean-mid border-b-2 border-ocean-mid'
+      : 'text-textSecondary hover:text-ocean-mid'
+  }`}
+>
+  <i className="fab fa-gcash mr-2"></i>
+  Archived GCash QR
+</button>
       </div>
       
       {/* Search */}
@@ -375,7 +465,7 @@ export default function ArchivePage() {
           <i className="fas fa-search absolute left-3 top-1/2 -translate-y-1/2 text-neutral text-sm"></i>
           <input
             type="text"
-            placeholder={`Search archived ${activeTab === 'rooms' ? 'rooms by name or type...' : activeTab === 'daytours' ? 'day tours by name or type...' : activeTab === 'activities' ? 'activities by name...' : 'bank accounts by name...'}`}
+            placeholder={`Search archived ${activeTab === 'rooms' ? 'rooms by name or type...' : activeTab === 'daytours' ? 'day tours by name or type...' : activeTab === 'activities' ? 'activities by name...' : activeTab === 'bankaccounts' ? 'bank accounts by name...' : 'items...'}`}
             value={searchTerm}
             onChange={(e) => setSearchTerm(e.target.value)}
             className="w-full pl-9 pr-3 py-2.5 border border-ocean-light/20 rounded-xl text-sm focus:outline-none focus:border-ocean-light focus:ring-2 focus:ring-ocean-light/20 transition-all duration-300 bg-white"
@@ -470,167 +560,181 @@ export default function ArchivePage() {
         </div>
       )}
       
-      {/* Day Tours Tab */}
-      {activeTab === 'daytours' && (
-        <div className="bg-white rounded-2xl shadow-md border border-ocean-light/10 overflow-hidden">
-          <div className="overflow-x-auto">
-            <table className="w-full">
-              <thead>
-                <tr className="bg-ocean-pale/50 border-b border-ocean-light/20">
-                  <th className="px-4 py-3 text-left text-sm font-semibold text-textPrimary">Day Tour Name</th>
-                  <th className="px-4 py-3 text-left text-sm font-semibold text-textPrimary">Day Tour Type</th>
-                  <th className="px-4 py-3 text-left text-sm font-semibold text-textPrimary">Max Capacity</th>
-                  <th className="px-4 py-3 text-left text-sm font-semibold text-textPrimary">Pricing</th>
-                  <th className="px-4 py-3 text-left text-sm font-semibold text-textPrimary">Status</th>
-                  <th className="px-4 py-3 text-left text-sm font-semibold text-textPrimary">Archived Date</th>
-                  <th className="px-4 py-3 text-left text-sm font-semibold text-textPrimary">Actions</th>
-                </tr>
-              </thead>
-              <tbody>
-                {filteredDayTours.length === 0 ? (
-                  <tr>
-                    <td colSpan="7" className="px-4 py-12 text-center text-neutral">
-                      <i className="fas fa-archive text-5xl mb-3 opacity-50 block"></i>
-                      <p className="text-lg">No archived day tours found</p>
-                      <p className="text-sm">Archived day tours will appear here</p>
-                    </td>
-                  </tr>
-                ) : (
-                  filteredDayTours.map((tour) => (
-                    <tr key={tour.id} className="border-b border-ocean-light/10 hover:bg-ocean-ice/30 transition-colors">
-                      <td className="px-4 py-3">
-                        <div className="font-medium text-textPrimary">{tour.name || 'Untitled Tour'}</div>
-                      </td>
-                      <td className="px-4 py-3">
-                        <div className="text-sm text-textSecondary">{tour.type || 'N/A'}</div>
-                      </td>
-                      <td className="px-4 py-3 text-textSecondary">
-                        {tour.maxCapacity ? (
-                          <span className="flex items-center gap-1">
-                            <i className="fas fa-users text-xs text-ocean-light"></i>
-                            {tour.maxCapacity} Guests
-                          </span>
-                        ) : (
-                          <span className="text-neutral">{tour.pricingType === 'per_person' ? 'Not applicable' : 'Unlimited'}</span>
-                        )}
-                      </td>
-                      <td className="px-4 py-3">
-                        {tour.pricingType === 'per_person' ? (
-                          <div>
-                            <div className="text-sm">Adult: ₱{tour.adultPrice?.toLocaleString()}<span className="text-xs text-neutral">/person</span></div>
-                            <div className="text-sm">Kid: ₱{tour.kidPrice?.toLocaleString()}<span className="text-xs text-neutral">/person</span></div>
-                          </div>
-                        ) : (
-                          <div>
-                            <div className="font-semibold text-ocean-mid">₱{tour.promoPrice?.toLocaleString()}</div>
-                            <div className="text-xs text-neutral">Promo Price</div>
-                          </div>
-                        )}
-                      </td>
-                      <td className="px-4 py-3">
-                        <span className={`px-2.5 py-1 rounded-full text-xs font-medium ${getTourAvailabilityStyle(tour.availability)}`}>
-                          {getTourAvailabilityLabel(tour.availability)}
-                        </span>
-                      </td>
-                      <td className="px-4 py-3 text-textSecondary text-sm">
-                        {tour.archivedAt ? new Date(tour.archivedAt).toLocaleDateString() : '—'}
-                      </td>
-                      <td className="px-4 py-3">
-                        <div className="flex gap-2">
-                          <button
-                            onClick={() => setRestoreModal({ show: true, item: tour, type: 'daytour' })}
-                            className="px-3 py-2 rounded-lg bg-green-500/10 text-green-600 hover:bg-green-600 hover:text-white transition-all duration-200 flex items-center gap-1"
-                            title="Restore"
-                          >
-                            <i className="fas fa-trash-restore"></i>
-                            <span className="text-sm">Restore</span>
-                          </button>
-                          <button
-                            onClick={() => setDeleteModal({ show: true, item: tour, type: 'daytour' })}
-                            className="px-3 py-2 rounded-lg bg-red-500/10 text-red-600 hover:bg-red-600 hover:text-white transition-all duration-200 flex items-center gap-1"
-                            title="Permanently Delete"
-                          >
-                            <i className="fas fa-trash-alt"></i>
-                            <span className="text-sm">Delete</span>
-                          </button>
-                        </div>
-                      </td>
-                    </tr>
-                  ))
-                )}
-              </tbody>
-            </table>
-          </div>
-        </div>
-      )}
+ {/* Day Tours Tab */}
+{activeTab === 'daytours' && (
+  <div className="bg-white rounded-2xl shadow-md border border-ocean-light/10 overflow-hidden">
+    <div className="overflow-x-auto">
+      <table className="w-full">
+        <thead>
+          <tr className="bg-ocean-pale/50 border-b border-ocean-light/20">
+            <th className="px-4 py-3 text-left text-sm font-semibold text-textPrimary">Adult Price</th>
+            <th className="px-4 py-3 text-left text-sm font-semibold text-textPrimary">Kid Price</th>
+            <th className="px-4 py-3 text-left text-sm font-semibold text-textPrimary">Senior Price</th>
+            <th className="px-4 py-3 text-left text-sm font-semibold text-textPrimary">Max Capacity</th>
+            <th className="px-4 py-3 text-left text-sm font-semibold text-textPrimary">Status</th>
+            <th className="px-4 py-3 text-left text-sm font-semibold text-textPrimary">Archived Date</th>
+            <th className="px-4 py-3 text-left text-sm font-semibold text-textPrimary">Actions</th>
+          </tr>
+        </thead>
+        <tbody>
+          {filteredDayTours.length === 0 ? (
+            <tr>
+              <td colSpan="7" className="px-4 py-12 text-center text-neutral">
+                <i className="fas fa-archive text-5xl mb-3 opacity-50 block"></i>
+                <p className="text-lg">No archived day tours found</p>
+                <p className="text-sm">Archived day tours will appear here</p>
+              </td>
+            </tr>
+          ) : (
+            filteredDayTours.map((tour) => (
+              <tr key={tour.id} className="border-b border-ocean-light/10 hover:bg-ocean-ice/30 transition-colors">
+                <td className="px-4 py-3">
+                  <span className="font-semibold text-ocean-mid">₱{(tour.adultPrice || 0).toLocaleString()}</span>
+                  <span className="text-xs text-neutral">/person</span>
+                </td>
+                <td className="px-4 py-3">
+                  <span className="font-semibold text-ocean-mid">₱{(tour.kidPrice || 0).toLocaleString()}</span>
+                  <span className="text-xs text-neutral">/person</span>
+                </td>
+                <td className="px-4 py-3">
+                  <span className="font-semibold text-ocean-mid">₱{(tour.seniorPrice || 0).toLocaleString()}</span>
+                  <span className="text-xs text-neutral">/person</span>
+                </td>
+                <td className="px-4 py-3 text-textSecondary">
+                  {tour.maxCapacity ? (
+                    <span className="flex items-center gap-1">
+                      <i className="fas fa-users text-xs text-ocean-light"></i>
+                      {tour.maxCapacity} Guests
+                    </span>
+                  ) : (
+                    <span className="text-neutral">Unlimited</span>
+                  )}
+                </td>
+                <td className="px-4 py-3">
+                  <span className={`px-2.5 py-1 rounded-full text-xs font-medium ${getTourAvailabilityStyle(tour.availability || 'available')}`}>
+                    {getTourAvailabilityLabel(tour.availability || 'available')}
+                  </span>
+                </td>
+                <td className="px-4 py-3 text-textSecondary text-sm">
+                  {tour.archivedAt ? new Date(tour.archivedAt).toLocaleDateString() : '—'}
+                </td>
+                <td className="px-4 py-3">
+                  <div className="flex gap-2">
+                    <button
+                      onClick={() => setRestoreModal({ show: true, item: tour, type: 'daytour' })}
+                      className="px-3 py-2 rounded-lg bg-green-500/10 text-green-600 hover:bg-green-600 hover:text-white transition-all duration-200 flex items-center gap-1"
+                      title="Restore"
+                    >
+                      <i className="fas fa-trash-restore"></i>
+                      <span className="text-sm">Restore</span>
+                    </button>
+                    <button
+                      onClick={() => setDeleteModal({ show: true, item: tour, type: 'daytour' })}
+                      className="px-3 py-2 rounded-lg bg-red-500/10 text-red-600 hover:bg-red-600 hover:text-white transition-all duration-200 flex items-center gap-1"
+                      title="Permanently Delete"
+                    >
+                      <i className="fas fa-trash-alt"></i>
+                      <span className="text-sm">Delete</span>
+                    </button>
+                  </div>
+                </td>
+              </tr>
+            ))
+          )}
+        </tbody>
+      </table>
+    </div>
+  </div>
+)}
       
-      {/* Activities Tab */}
-      {activeTab === 'activities' && (
-        <div className="bg-white rounded-2xl shadow-md border border-ocean-light/10 overflow-hidden">
-          <div className="overflow-x-auto">
-            <table className="w-full">
-              <thead>
-                <tr className="bg-ocean-pale/50 border-b border-ocean-light/20">
-                  <th className="px-4 py-3 text-left text-sm font-semibold text-textPrimary">Activity Name</th>
-                  <th className="px-4 py-3 text-left text-sm font-semibold text-textPrimary">Price per Hour</th>
-                  <th className="px-4 py-3 text-left text-sm font-semibold text-textPrimary">Description</th>
-                  <th className="px-4 py-3 text-left text-sm font-semibold text-textPrimary">Archived Date</th>
-                  <th className="px-4 py-3 text-left text-sm font-semibold text-textPrimary">Actions</th>
+{/* Activities Tab */}
+{activeTab === 'activities' && (
+  <div className="bg-white rounded-2xl shadow-md border border-ocean-light/10 overflow-hidden">
+    <div className="overflow-x-auto">
+      <table className="w-full">
+        <thead>
+          <tr className="bg-ocean-pale/50 border-b border-ocean-light/20">
+            <th className="px-4 py-3 text-left text-sm font-semibold text-textPrimary">Activity Name</th>
+            <th className="px-4 py-3 text-left text-sm font-semibold text-textPrimary">Price</th>
+            <th className="px-4 py-3 text-left text-sm font-semibold text-textPrimary">Description</th>
+            <th className="px-4 py-3 text-left text-sm font-semibold text-textPrimary">Archived Date</th>
+            <th className="px-4 py-3 text-left text-sm font-semibold text-textPrimary">Actions</th>
+           </tr>
+        </thead>
+        <tbody>
+          {filteredActivities.length === 0 ? (
+            <tr>
+              <td colSpan="5" className="px-4 py-12 text-center text-neutral">
+                <i className="fas fa-archive text-5xl mb-3 opacity-50 block"></i>
+                <p className="text-lg">No archived activities found</p>
+                <p className="text-sm">Archived activities will appear here</p>
+              </td>
+            </tr>
+          ) : (
+            filteredActivities.map((activity) => {
+              // Format price display based on priceType
+              const getPriceDisplay = () => {
+                const priceValue = activity.priceValue || 0;
+                const priceType = activity.priceType || 'perHour';
+                const formattedPrice = `₱${priceValue.toLocaleString()}`;
+                
+                switch (priceType) {
+                  case 'perHour':
+                    return `${formattedPrice}/hour`;
+                  case 'per30Mins':
+                    return `${formattedPrice}/30 minutes`;
+                  case 'per2Hrs':
+                    return `${formattedPrice}/2 hours`;
+                  case 'per1Hr30Mins':
+                    return `${formattedPrice}/1.5 hours`;
+                  default:
+                    return formattedPrice;
+                }
+              };
+              
+              return (
+                <tr key={activity.id} className="border-b border-ocean-light/10 hover:bg-ocean-ice/30 transition-colors">
+                  <td className="px-4 py-3">
+                    <div className="font-medium text-textPrimary">{activity.name || 'Untitled'}</div>
+                  </td>
+                  <td className="px-4 py-3">
+                    <span className="font-semibold text-ocean-mid">{getPriceDisplay()}</span>
+                  </td>
+                  <td className="px-4 py-3">
+                    <p className="text-sm text-textSecondary line-clamp-2 max-w-xs">{activity.description || 'No description'}</p>
+                  </td>
+                  <td className="px-4 py-3 text-textSecondary text-sm">
+                    {activity.archivedAt ? new Date(activity.archivedAt).toLocaleDateString() : '—'}
+                  </td>
+                  <td className="px-4 py-3">
+                    <div className="flex gap-2">
+                      <button
+                        onClick={() => setRestoreModal({ show: true, item: activity, type: 'activity' })}
+                        className="px-3 py-2 rounded-lg bg-green-500/10 text-green-600 hover:bg-green-600 hover:text-white transition-all duration-200 flex items-center gap-1"
+                        title="Restore"
+                      >
+                        <i className="fas fa-trash-restore"></i>
+                        <span className="text-sm">Restore</span>
+                      </button>
+                      <button
+                        onClick={() => setDeleteModal({ show: true, item: activity, type: 'activity' })}
+                        className="px-3 py-2 rounded-lg bg-red-500/10 text-red-600 hover:bg-red-600 hover:text-white transition-all duration-200 flex items-center gap-1"
+                        title="Permanently Delete"
+                      >
+                        <i className="fas fa-trash-alt"></i>
+                        <span className="text-sm">Delete</span>
+                      </button>
+                    </div>
+                  </td>
                 </tr>
-              </thead>
-              <tbody>
-                {filteredActivities.length === 0 ? (
-                  <tr>
-                    <td colSpan="5" className="px-4 py-12 text-center text-neutral">
-                      <i className="fas fa-archive text-5xl mb-3 opacity-50 block"></i>
-                      <p className="text-lg">No archived activities found</p>
-                      <p className="text-sm">Archived activities will appear here</p>
-                    </td>
-                  </tr>
-                ) : (
-                  filteredActivities.map((activity) => (
-                    <tr key={activity.id} className="border-b border-ocean-light/10 hover:bg-ocean-ice/30 transition-colors">
-                      <td className="px-4 py-3">
-                        <div className="font-medium text-textPrimary">{activity.name}</div>
-                      </td>
-                      <td className="px-4 py-3">
-                        <span className="font-semibold text-ocean-mid">₱{activity.pricePerHour.toLocaleString()}</span>
-                        <span className="text-xs text-neutral">/hour</span>
-                      </td>
-                      <td className="px-4 py-3">
-                        <p className="text-sm text-textSecondary line-clamp-2 max-w-xs">{activity.description}</p>
-                      </td>
-                      <td className="px-4 py-3 text-textSecondary text-sm">
-                        {activity.archivedAt ? new Date(activity.archivedAt).toLocaleDateString() : '—'}
-                      </td>
-                      <td className="px-4 py-3">
-                        <div className="flex gap-2">
-                          <button
-                            onClick={() => setRestoreModal({ show: true, item: activity, type: 'activity' })}
-                            className="px-3 py-2 rounded-lg bg-green-500/10 text-green-600 hover:bg-green-600 hover:text-white transition-all duration-200 flex items-center gap-1"
-                            title="Restore"
-                          >
-                            <i className="fas fa-trash-restore"></i>
-                            <span className="text-sm">Restore</span>
-                          </button>
-                          <button
-                            onClick={() => setDeleteModal({ show: true, item: activity, type: 'activity' })}
-                            className="px-3 py-2 rounded-lg bg-red-500/10 text-red-600 hover:bg-red-600 hover:text-white transition-all duration-200 flex items-center gap-1"
-                            title="Permanently Delete"
-                          >
-                            <i className="fas fa-trash-alt"></i>
-                            <span className="text-sm">Delete</span>
-                          </button>
-                        </div>
-                      </td>
-                    </tr>
-                  ))
-                )}
-              </tbody>
-            </table>
-          </div>
-        </div>
-      )}
+              );
+            })
+          )}
+        </tbody>
+      </table>
+    </div>
+  </div>
+)}
       
       {/* Bank Accounts Tab */}
       {activeTab === 'bankaccounts' && (
@@ -657,10 +761,10 @@ export default function ArchivePage() {
                   </tr>
                 ) : (
                   filteredBankAccounts.map((account) => (
-                    <tr key={account.id} className="border-b border-ocean-light/10 hover:bg-ocean-ice/30 transition-colors">
+                    <tr key={account.firestoreId} className="border-b border-ocean-light/10 hover:bg-ocean-ice/30 transition-colors">
                       <td className="px-4 py-3">
                         <div className="font-medium text-textPrimary">{account.bankName}</div>
-                      </td>
+                       </td>
                       <td className="px-4 py-3 text-textSecondary">{account.accountName}</td>
                       <td className="px-4 py-3 text-textSecondary">{account.accountNumber}</td>
                       <td className="px-4 py-3 text-textSecondary text-sm">
@@ -694,6 +798,72 @@ export default function ArchivePage() {
           </div>
         </div>
       )}
+
+      {/* GCash QR Tab */}
+{activeTab === 'gcashqr' && (
+  <div className="bg-white rounded-2xl shadow-md border border-ocean-light/10 overflow-hidden">
+    <div className="overflow-x-auto">
+      <table className="w-full">
+        <thead>
+          <tr className="bg-ocean-pale/50 border-b border-ocean-light/20">
+            <th className="px-4 py-3 text-left text-sm font-semibold text-textPrimary">QR Code Preview</th>
+            <th className="px-4 py-3 text-left text-sm font-semibold text-textPrimary">Archived Date</th>
+            <th className="px-4 py-3 text-left text-sm font-semibold text-textPrimary">Actions</th>
+          </tr>
+        </thead>
+        <tbody>
+          {filteredGCashQRs.length === 0 ? (
+            <tr>
+              <td colSpan="3" className="px-4 py-12 text-center text-neutral">
+                <i className="fas fa-archive text-5xl mb-3 opacity-50 block"></i>
+                <p className="text-lg">No archived GCash QR codes found</p>
+                <p className="text-sm">Archived GCash QR codes will appear here</p>
+              </td>
+            </tr>
+          ) : (
+            filteredGCashQRs.map((qr) => (
+              <tr key={qr.firestoreId} className="border-b border-ocean-light/10 hover:bg-ocean-ice/30 transition-colors">
+                <td className="px-4 py-3">
+                  <div className="w-16 h-16 relative">
+                    <Image
+                      src={qr.qrCodeUrl}
+                      alt="Archived GCash QR Code"
+                      fill
+                      className="object-contain rounded-lg"
+                    />
+                  </div>
+                </td>
+                <td className="px-4 py-3 text-textSecondary text-sm">
+                  {qr.archivedAt ? new Date(qr.archivedAt).toLocaleDateString() : '—'}
+                </td>
+                <td className="px-4 py-3">
+                  <div className="flex gap-2">
+                    <button
+                      onClick={() => setRestoreModal({ show: true, item: qr, type: 'gcashqr' })}
+                      className="px-3 py-2 rounded-lg bg-green-500/10 text-green-600 hover:bg-green-600 hover:text-white transition-all duration-200 flex items-center gap-1"
+                      title="Restore"
+                    >
+                      <i className="fas fa-trash-restore"></i>
+                      <span className="text-sm">Restore</span>
+                    </button>
+                    <button
+                      onClick={() => setDeleteModal({ show: true, item: qr, type: 'gcashqr' })}
+                      className="px-3 py-2 rounded-lg bg-red-500/10 text-red-600 hover:bg-red-600 hover:text-white transition-all duration-200 flex items-center gap-1"
+                      title="Permanently Delete"
+                    >
+                      <i className="fas fa-trash-alt"></i>
+                      <span className="text-sm">Delete</span>
+                    </button>
+                  </div>
+                </td>
+              </tr>
+            ))
+          )}
+        </tbody>
+      </table>
+    </div>
+  </div>
+)}
       
       {/* Restore Confirmation Modal */}
       {restoreModal.show && restoreModal.item && (
