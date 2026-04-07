@@ -230,10 +230,7 @@ export default function AdminReservations() {
   const handleRefundNotify = async (booking) => {
     setRefundConfirmModal(prev => ({ ...prev, sending: true }));
     try {
-      const isRoomBooking = booking?.type === 'room';
-      const collectionName = isRoomBooking ? 'bookings' : 'dayTourBookings';
-      const notificationType = isRoomBooking ? 'room' : 'daytour';
-      const bookingRef = doc(db, collectionName, booking.id);
+      const bookingRef = doc(db, 'dayTourBookings', booking.id);
       await updateDoc(bookingRef, {
         refundProcessed: true,
         refundProcessedAt: new Date().toISOString(),
@@ -247,7 +244,7 @@ export default function AdminReservations() {
       const response = await fetch('/api/admin/send-refund-notification', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ bookingId: booking.id, type: notificationType })
+        body: JSON.stringify({ bookingId: booking.id, type: 'daytour' })
       });
       const data = await response.json();
 
@@ -258,8 +255,8 @@ export default function AdminReservations() {
         
         await logAdminAction({
           action: 'Refund Notification Sent',
-          module: isRoomBooking ? 'Reservations' : 'Day Tour Reservations',
-          details: `Sent refund notification for ${isRoomBooking ? 'room' : 'day tour'} booking ${booking.bookingId} to ${booking.guestInfo?.firstName} ${booking.guestInfo?.lastName} (${booking.guestInfo?.email}). Refund amount: ₱${refundAmount.toLocaleString()} (50% of down payment). Balance updated to 0.`
+          module: 'Day Tour Reservations',
+          details: `Sent refund notification for day tour booking ${booking.bookingId} to ${booking.guestInfo?.firstName} ${booking.guestInfo?.lastName} (${booking.guestInfo?.email}). Refund amount: ₱${refundAmount.toLocaleString()} (50% of down payment). Balance updated to 0.`
         });
         
         showNotification(`Refund notification sent and balance updated to 0.`, 'success');

@@ -44,6 +44,8 @@ export default function BookingPage() {
     email: '',
     phone: '',
     paymentProof: null,
+    validIdType: '',
+    validIdImage: null,
     bookingId: null
   });
   const [errors, setErrors] = useState({});
@@ -68,6 +70,22 @@ export default function BookingPage() {
   const [selectedBankAccount, setSelectedBankAccount] = useState(null);
   const [showBankSelection, setShowBankSelection] = useState(false);
   const [downPaymentAmount, setDownPaymentAmount] = useState(0);
+
+  const [showValidIdModal, setShowValidIdModal] = useState(false);
+  const [tempValidIdType, setTempValidIdType] = useState('Passport');
+  const [tempValidIdImage, setTempValidIdImage] = useState(null);
+  const [validIdUploading, setValidIdUploading] = useState(false);
+
+  const validIdOptions = [
+    'Passport',
+    "Driver's License",
+    'National ID',
+    'UMID',
+    'Postal ID',
+    "Voter's ID / Voter's Certificate",
+    'PhilHealth ID',
+    'Other Government IDs'
+  ];
 
   // Generate unique booking reference number
   const generateBookingReference = () => {
@@ -497,6 +515,34 @@ export default function BookingPage() {
     }
   };
 
+  const handleValidIdFileChange = async (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+
+    setValidIdUploading(true);
+    try {
+      const reader = new FileReader();
+      reader.onloadend = () => {
+        setTempValidIdImage(reader.result);
+        setValidIdUploading(false);
+      };
+      reader.readAsDataURL(file);
+    } catch (error) {
+      console.error('Error uploading valid ID:', error);
+      setValidIdUploading(false);
+    }
+  };
+
+  const handleSaveValidId = () => {
+    if (!tempValidIdImage || !tempValidIdType) return;
+    setBookingData(prev => ({
+      ...prev,
+      validIdType: tempValidIdType,
+      validIdImage: tempValidIdImage
+    }));
+    setShowValidIdModal(false);
+  };
+
   const handleSubmitBooking = async () => {
     setSubmitting(true);
     try {
@@ -565,6 +611,8 @@ export default function BookingPage() {
         status: 'pending',
         paymentMethod: paymentMethod,
         paymentProof: bookingData.paymentProof,
+        validIdType: bookingData.validIdType || null,
+        validIdImage: bookingData.validIdImage || null,
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
         type: 'room',
@@ -894,6 +942,36 @@ export default function BookingPage() {
                   {/* GCash Payment Section */}
                   {paymentMethod === 'gcash' && (
                     <div className="space-y-6">
+                      <div>
+                        <label className="block text-sm font-semibold text-textPrimary mb-2">Upload Valid ID *</label>
+                        <p className="text-xs text-textSecondary mb-2">
+                          Full name on the ID must match the booking details. Image must be clear (front only) with no blur.
+                        </p>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setTempValidIdType(bookingData.validIdType || 'Passport');
+                            setTempValidIdImage(bookingData.validIdImage || null);
+                            setShowValidIdModal(true);
+                          }}
+                          className="inline-flex items-center gap-2 px-4 py-2 rounded-lg border border-ocean-light/40 text-sm font-medium text-textPrimary hover:bg-ocean-ice transition-all duration-200"
+                        >
+                          <i className="fas fa-id-card text-ocean-mid"></i>
+                          {bookingData.validIdImage ? 'Change Uploaded Valid ID' : 'Choose File'}
+                        </button>
+                        {bookingData.validIdType && (
+                          <p className="mt-2 text-xs text-ocean-mid">
+                            Selected ID: <span className="font-semibold">{bookingData.validIdType}</span>
+                          </p>
+                        )}
+                        {bookingData.validIdImage && (
+                          <p className="mt-1 text-xs text-green-600 flex items-center gap-1">
+                            <i className="fas fa-check-circle"></i>
+                            Valid ID uploaded
+                          </p>
+                        )}
+                      </div>
+
                       <div className="p-5 bg-ocean-ice rounded-xl text-center">
                         <h3 className="text-lg font-semibold text-textPrimary mb-3 flex items-center justify-center gap-2">
                           <i className="fab fa-gcash text-ocean-mid"></i>
@@ -971,6 +1049,35 @@ export default function BookingPage() {
                   {/* Bank Transfer Section */}
                   {paymentMethod === 'bank_transfer' && (
                     <div className="space-y-6">
+                      <div>
+                        <label className="block text-sm font-semibold text-textPrimary mb-2">Upload Valid ID *</label>
+                        <p className="text-xs text-textSecondary mb-2">
+                          Full name on the ID must match the booking details. Image must be clear (front only) with no blur.
+                        </p>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setTempValidIdType(bookingData.validIdType || 'Passport');
+                            setTempValidIdImage(bookingData.validIdImage || null);
+                            setShowValidIdModal(true);
+                          }}
+                          className="inline-flex items-center gap-2 px-4 py-2 rounded-lg border border-ocean-light/40 text-sm font-medium text-textPrimary hover:bg-ocean-ice transition-all duration-200"
+                        >
+                          <i className="fas fa-id-card text-ocean-mid"></i>
+                          {bookingData.validIdImage ? 'Change Uploaded Valid ID' : 'Choose File'}
+                        </button>
+                        {bookingData.validIdType && (
+                          <p className="mt-2 text-xs text-ocean-mid">
+                            Selected ID: <span className="font-semibold">{bookingData.validIdType}</span>
+                          </p>
+                        )}
+                        {bookingData.validIdImage && (
+                          <p className="mt-1 text-xs text-green-600 flex items-center gap-1">
+                            <i className="fas fa-check-circle"></i>
+                            Valid ID uploaded
+                          </p>
+                        )}
+                      </div>
                       <div className="p-5 bg-ocean-ice rounded-xl">
                         <h3 className="text-lg font-semibold text-textPrimary mb-3 flex items-center gap-2">
                           <i className="fas fa-university text-ocean-mid"></i>
@@ -1142,9 +1249,17 @@ export default function BookingPage() {
                     </button>
                     <button
                       onClick={handleSubmitBooking}
-                      disabled={!bookingData.paymentProof || submitting || (paymentMethod === 'bank_transfer' && !bankDetailsProvided)}
+                      disabled={
+                        !bookingData.paymentProof ||
+                        !bookingData.validIdImage ||
+                        submitting ||
+                        (paymentMethod === 'bank_transfer' && !bankDetailsProvided)
+                      }
                       className={`flex-1 py-3 rounded-xl font-medium transition-all duration-300 ${
-                        bookingData.paymentProof && !submitting && (paymentMethod !== 'bank_transfer' || bankDetailsProvided)
+                        bookingData.paymentProof &&
+                        bookingData.validIdImage &&
+                        !submitting &&
+                        (paymentMethod !== 'bank_transfer' || bankDetailsProvided)
                           ? 'bg-gradient-to-r from-ocean-mid to-ocean-light text-white hover:shadow-lg'
                           : 'bg-gray-200 text-gray-500 cursor-not-allowed'
                       }`}
@@ -1295,6 +1410,102 @@ export default function BookingPage() {
           </div>
         </div>
       </div>
+
+      {showValidIdModal && (
+        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-2xl w-full max-w-md p-6 shadow-2xl" onClick={(e) => e.stopPropagation()}>
+            <div className="flex justify-between items-center mb-4">
+              <h3 className="text-lg font-bold text-textPrimary">Upload Valid ID</h3>
+              <button
+                onClick={() => setShowValidIdModal(false)}
+                className="w-8 h-8 rounded-full bg-ocean-ice hover:bg-ocean-light/30 text-neutral hover:text-textPrimary transition-all duration-200 flex items-center justify-center"
+              >
+                <i className="fas fa-times"></i>
+              </button>
+            </div>
+
+            <div className="space-y-4">
+              <div>
+                <label className="block text-sm font-semibold text-textPrimary mb-2">ID Type</label>
+                <select
+                  value={tempValidIdType}
+                  onChange={(e) => setTempValidIdType(e.target.value)}
+                  className="w-full px-3 py-2 border border-ocean-light/30 rounded-lg text-sm focus:outline-none focus:border-ocean-light focus:ring-2 focus:ring-ocean-light/20"
+                >
+                  {validIdOptions.map((option) => (
+                    <option key={option} value={option}>
+                      {option}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <p className="text-xs text-textSecondary">
+                Requirements:
+                <br />- Full name must match booking details
+                <br />- Image must be clear (front only)
+                <br />- No blurred images allowed
+              </p>
+
+              <div className="pt-1 border-t border-ocean-light/20">
+                <label className="block text-sm font-semibold text-textPrimary mb-2">Valid ID Image (front only)</label>
+                <div className="relative mb-3">
+                  <input
+                    type="file"
+                    accept="image/*"
+                    onChange={handleValidIdFileChange}
+                    className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
+                    id="valid-id-upload"
+                    disabled={validIdUploading}
+                  />
+                  <label
+                    htmlFor="valid-id-upload"
+                    className={`inline-flex items-center gap-2 px-4 py-2.5 rounded-lg font-medium transition-all duration-300 cursor-pointer ${
+                      validIdUploading
+                        ? 'bg-gray-300 text-gray-500 cursor-not-allowed'
+                        : 'bg-gradient-to-r from-ocean-mid to-ocean-light text-white hover:shadow-lg'
+                    }`}
+                  >
+                    <i className="fas fa-upload"></i>
+                    {validIdUploading ? 'Uploading...' : tempValidIdImage ? 'Change Image' : 'Choose File'}
+                  </label>
+                </div>
+
+                {tempValidIdImage && (
+                  <div className="mt-2">
+                    <p className="text-xs font-semibold text-textPrimary mb-1">Preview</p>
+                    <div className="border border-ocean-light/30 rounded-lg overflow-hidden bg-ocean-ice">
+                      <img
+                        src={tempValidIdImage}
+                        alt="Valid ID Preview"
+                        className="w-full max-h-64 object-contain bg-white"
+                      />
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
+
+            <div className="flex justify-end gap-3 mt-6">
+              <button
+                type="button"
+                onClick={() => setShowValidIdModal(false)}
+                className="px-4 py-2 border border-ocean-light/30 rounded-lg text-sm text-textSecondary hover:bg-ocean-ice transition-all duration-200"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleSaveValidId}
+                disabled={!tempValidIdImage || !tempValidIdType || validIdUploading}
+                className="px-4 py-2 bg-gradient-to-r from-ocean-mid to-ocean-light rounded-lg text-sm font-medium text-white hover:shadow-lg transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                Save Valid ID
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       <style jsx>{`
         @keyframes fadeIn {

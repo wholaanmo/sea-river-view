@@ -278,7 +278,10 @@ export default function AdminReservations() {
   const handleMoveDateNotify = async (booking) => {
     setMoveDateConfirmModal(prev => ({ ...prev, sending: true }));
     try {
-      const bookingRef = doc(db, 'dayTourBookings', booking.id);
+      const isRoomBooking = booking?.type === 'room';
+      const collectionName = isRoomBooking ? 'bookings' : 'dayTourBookings';
+      const notificationType = isRoomBooking ? 'room' : 'daytour';
+      const bookingRef = doc(db, collectionName, booking.id);
       await updateDoc(bookingRef, {
         moveDateNotificationSent: true,
         moveDateNotificationSentAt: new Date().toISOString(),
@@ -290,7 +293,7 @@ export default function AdminReservations() {
       const response = await fetch('/api/admin/send-move-date-notification', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ bookingId: booking.id, type: 'daytour' })
+        body: JSON.stringify({ bookingId: booking.id, type: notificationType })
       });
       const data = await response.json();
 
