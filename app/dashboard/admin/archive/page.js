@@ -350,9 +350,16 @@ const handleDelete = async () => {
   });
   
   const filteredDayTours = archivedDayTours.filter(tour => {
-    const matchesSearch = tour.name?.toLowerCase().includes(searchTerm.toLowerCase()) ||
-                         tour.type?.toLowerCase().includes(searchTerm.toLowerCase());
-    return matchesSearch;
+    const q = searchTerm.trim().toLowerCase();
+    if (!q) return true;
+    return (
+      tour.description?.toLowerCase().includes(q) ||
+      String(tour.adultPrice ?? '').toLowerCase().includes(q) ||
+      String(tour.kidPrice ?? '').toLowerCase().includes(q) ||
+      String(tour.seniorPrice ?? '').toLowerCase().includes(q) ||
+      String(tour.maxCapacity ?? '').toLowerCase().includes(q) ||
+      String(tour.availability ?? '').toLowerCase().includes(q)
+    );
   });
   
   const filteredActivities = archivedActivities.filter(activity => {
@@ -874,12 +881,18 @@ const handleDelete = async () => {
                 <i className="fas fa-trash-restore text-green-500 text-2xl"></i>
               </div>
               <h3 className="text-lg font-bold text-textPrimary mb-2">Restore Item</h3>
-              <p className="text-textSecondary text-sm">
-                Are you sure you want to restore "{restoreModal.type === 'bankaccount' 
-                  ? `${restoreModal.item.bankName} - ${restoreModal.item.accountName}`
-                  : (restoreModal.item.name || restoreModal.item.type || restoreModal.item.name)}"? 
-                This item will be moved back to active listings.
-              </p>
+<p className="text-textSecondary text-sm"> 
+  Are you sure you want to restore{" "}
+  {restoreModal.type === 'bankaccount' 
+    ? `${restoreModal.item.bankName?.trim()} - ${restoreModal.item.accountName?.trim()}`
+    : restoreModal.type === 'daytour'
+      ? 'this day tour'
+      : restoreModal.type === 'gcashqr'
+        ? 'this QR code'
+        : (restoreModal.item.name?.trim() || restoreModal.item.type?.trim())
+  }? 
+  This item will be moved back to active listings.
+</p>
             </div>
             <div className="flex gap-3 justify-center">
               <button

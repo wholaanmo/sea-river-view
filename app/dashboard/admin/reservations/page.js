@@ -3,7 +3,7 @@
 
 import { useState, useEffect } from 'react';
 import { db } from '../../../../lib/firebase';
-import { collection, query, orderBy, onSnapshot, where, updateDoc, doc, getDocs } from 'firebase/firestore';
+import { collection, query, orderBy, onSnapshot, updateDoc, doc } from 'firebase/firestore';
 import { logAdminAction } from '../../../../lib/auditLogger';
 import { sendConfirmationEmail, sendCancellationEmail } from '../../../../lib/emailService';
 
@@ -35,7 +35,25 @@ export default function AdminReservations() {
   // Track which bookings have had notifications sent
   const [notificationSent, setNotificationSent] = useState({});
 
-  const statuses = ['all', 'pending', 'confirmed', 'check-in', 'check-out', 'cancelled', 'cancelled-by-guest'];
+  const roomStatuses = ['all', 'pending', 'confirmed', 'check-in', 'check-out', 'completed', 'cancelled', 'cancelled-by-guest'];
+  const dayTourStatuses = ['all', 'pending', 'confirmed', 'check-in', 'completed', 'cancelled', 'cancelled-by-guest'];
+  const statusOrder = {
+    pending: 1,
+    confirmed: 2,
+    'check-in': 3,
+    // Keep check-out grouped with check-in for "All" sorting order requested by UI.
+    'check-out': 3,
+    completed: 4,
+    cancelled: 5,
+    'cancelled-by-guest': 6
+  };
+
+  useEffect(() => {
+    const allowed = activeTab === 'rooms' ? roomStatuses : dayTourStatuses;
+    if (!allowed.includes(statusFilter)) {
+      setStatusFilter('all');
+    }
+  }, [activeTab, statusFilter]);
 
   // Real-time listener for room bookings
   useEffect(() => {
@@ -63,6 +81,95 @@ export default function AdminReservations() {
     
     return () => unsubscribe();
   }, []);
+
+  // Automatic room booking status transitions:
+  // confirmed -> check-in at check-in time
+  // check-in/confirmed -> check-out from 1 hour before check-out until check-out time
+  // check-out/check-in/confirmed -> completed after check-out time
+  useEffect(() => {
+    if (!bookings.length) return;
+    let isProcessing = false;
+    const tick = async () => {
+      if (isProcessing) return;
+      isProcessing = true;
+      try {
+        const now = new Date();
+        for (const booking of bookings) {
+          if (!booking?.id || !booking?.status) continue;
+          if (['pending', 'cancelled', 'cancelled-by-guest', 'completed'].includes(booking.status)) continue;
+          const checkInRaw = booking.checkIn?.toDate ? booking.checkIn.toDate() : new Date(booking.checkIn);
+          const checkOutRaw = booking.checkOut?.toDate ? booking.checkOut.toDate() : new Date(booking.checkOut);
+          if (isNaN(checkInRaw?.getTime?.()) || isNaN(checkOutRaw?.getTime?.())) continue;
+          const oneHourBeforeCheckOut = new Date(checkOutRaw.getTime() - 60 * 60 * 1000);
+          let targetStatus = null;
+          if (now > checkOutRaw) {
+            targetStatus = 'completed';
+          } else if (now >= oneHourBeforeCheckOut && now <= checkOutRaw) {
+            targetStatus = 'check-out';
+          } else if (now >= checkInRaw) {
+            targetStatus = 'check-in';
+          }
+          if (targetStatus && booking.status !== targetStatus) {
+            await updateDoc(doc(db, 'bookings', booking.id), {
+              status: targetStatus,
+              updatedAt: new Date().toISOString()
+            });
+          }
+        }
+      } catch (error) {
+        console.error('Error auto-updating room reservation statuses:', error);
+      } finally {
+        isProcessing = false;
+      }
+    };
+    tick();
+    const id = setInterval(tick, 1000);
+    return () => clearInterval(id);
+  }, [bookings]);
+
+  // Automatic day-tour status transitions:
+  // confirmed -> check-in when selected day starts
+  // check-in/confirmed -> completed after selected day ends
+  useEffect(() => {
+    if (!dayTours.length) return;
+    let isProcessing = false;
+    const tick = async () => {
+      if (isProcessing) return;
+      isProcessing = true;
+      try {
+        const now = new Date();
+        for (const tour of dayTours) {
+          if (!tour?.id || !tour?.status) continue;
+          if (['pending', 'cancelled', 'cancelled-by-guest', 'completed'].includes(tour.status)) continue;
+          if (!tour.selectedDate) continue;
+          const dateKey = String(tour.selectedDate);
+          if (!/^\d{4}-\d{2}-\d{2}$/.test(dateKey)) continue;
+          const [y, m, d] = dateKey.split('-').map(Number);
+          const dayStart = new Date(y, m - 1, d, 0, 0, 0, 0);
+          const dayEnd = new Date(y, m - 1, d, 23, 59, 59, 999);
+          let targetStatus = null;
+          if (now > dayEnd) {
+            targetStatus = 'completed';
+          } else if (now >= dayStart) {
+            targetStatus = 'check-in';
+          }
+          if (targetStatus && tour.status !== targetStatus) {
+            await updateDoc(doc(db, 'dayTourBookings', tour.id), {
+              status: targetStatus,
+              updatedAt: new Date().toISOString()
+            });
+          }
+        }
+      } catch (error) {
+        console.error('Error auto-updating day tour reservation statuses:', error);
+      } finally {
+        isProcessing = false;
+      }
+    };
+    tick();
+    const id = setInterval(tick, 1000);
+    return () => clearInterval(id);
+  }, [dayTours]);
 
   // Real-time listener for day tour bookings
   useEffect(() => {
@@ -109,6 +216,8 @@ export default function AdminReservations() {
         return 'bg-blue-100 text-blue-700';
       case 'check-out':
         return 'bg-purple-100 text-purple-700';
+      case 'completed':
+        return 'bg-emerald-100 text-emerald-700';
       case 'cancelled':
         return 'bg-red-100 text-red-700';
       case 'cancelled-by-guest':
@@ -594,6 +703,15 @@ const handleCancelDayTourReservation = async () => {
     
     const matchesStatus = statusFilter === 'all' || booking.status === statusFilter;
     return matchesSearch && matchesStatus;
+  }).sort((a, b) => {
+    if (statusFilter === 'all') {
+      const pa = statusOrder[a.status] || 999;
+      const pb = statusOrder[b.status] || 999;
+      if (pa !== pb) return pa - pb;
+    }
+    const da = a.createdAt?.toDate ? a.createdAt.toDate() : new Date(a.createdAt || 0);
+    const dbt = b.createdAt?.toDate ? b.createdAt.toDate() : new Date(b.createdAt || 0);
+    return dbt - da;
   });
 
   const filteredDayTours = dayTours.filter(tour => {
@@ -670,7 +788,7 @@ const handleCancelDayTourReservation = async () => {
 
       {/* Status Tabs */}
       <div className="flex gap-2 mb-6 overflow-x-auto pb-2">
-        {statuses.map((status) => (
+        {(activeTab === 'rooms' ? roomStatuses : dayTourStatuses).map((status) => (
           <button
             key={status}
             onClick={() => setStatusFilter(status)}
@@ -1236,7 +1354,7 @@ const handleCancelDayTourReservation = async () => {
             <div className="flex gap-3 justify-center">
               <button
                 onClick={() => setShowReasonModal({ show: false, booking: null, reason: '', sending: false })}
-                className="px-5 py-2 border border-ocean-light/20 rounded-xl text-textSecondary text-sm font-medium hover:bg-ocean-ice transition-all duration-300"
+                className="px-4 py-2 border border-ocean-light/20 rounded-xl text-textSecondary text-sm font-medium hover:bg-ocean-ice transition-all duration-300"
                 disabled={showReasonModal.sending || moveDateModal.sending}
               >
                 Close
@@ -1244,7 +1362,7 @@ const handleCancelDayTourReservation = async () => {
               <button
                 onClick={() => setRefundConfirmModal({ show: true, booking: showReasonModal.booking })}
                 disabled={isNotificationDisabled(showReasonModal.booking)}
-                className={`px-5 py-2 rounded-xl text-white text-sm font-medium transition-all duration-300 flex items-center gap-2 ${
+                className={`px-4 py-2 rounded-xl text-white text-sm font-medium transition-all duration-300 flex items-center gap-2 ${
                   isNotificationDisabled(showReasonModal.booking)
                     ? 'bg-gray-400 cursor-not-allowed opacity-50'
                     : 'bg-gradient-to-r from-green-500 to-green-600 hover:shadow-lg hover:-translate-y-0.5'
@@ -1257,7 +1375,7 @@ const handleCancelDayTourReservation = async () => {
               <button
                 onClick={() => setMoveDateConfirmModal({ show: true, booking: showReasonModal.booking })}
                 disabled={isNotificationDisabled(showReasonModal.booking)}
-                className={`px-5 py-2 rounded-xl text-white text-sm font-medium transition-all duration-300 flex items-center gap-2 ${
+                className={`px-4 py-2 rounded-xl text-white text-sm font-medium transition-all duration-300 flex items-center gap-2 ${
                   isNotificationDisabled(showReasonModal.booking)
                     ? 'bg-gray-400 cursor-not-allowed opacity-50'
                     : 'bg-gradient-to-r from-blue-500 to-blue-600 hover:shadow-lg hover:-translate-y-0.5'
@@ -1292,7 +1410,7 @@ const handleCancelDayTourReservation = async () => {
             <div className="flex gap-3 justify-center">
               <button
                 onClick={() => setRefundConfirmModal({ show: false, booking: null, sending: false })}
-                className="px-5 py-2 border border-ocean-light/20 rounded-xl text-textSecondary text-sm font-medium hover:bg-ocean-ice transition-all duration-300"
+                className="px-4 py-2 border border-ocean-light/20 rounded-xl text-textSecondary text-sm font-medium hover:bg-ocean-ice transition-all duration-300"
                 disabled={refundConfirmModal.sending}
               >
                 Cancel
@@ -1300,7 +1418,7 @@ const handleCancelDayTourReservation = async () => {
               <button
                 onClick={() => handleRefundNotify(refundConfirmModal.booking)}
                 disabled={refundConfirmModal.sending}
-                className="px-5 py-2 bg-gradient-to-r from-green-500 to-green-600 rounded-xl text-white text-sm font-medium hover:shadow-lg hover:-translate-y-0.5 transition-all duration-300 disabled:opacity-50"
+                className="px-4 py-2 bg-gradient-to-r from-green-500 to-green-600 rounded-xl text-white text-sm font-medium hover:shadow-lg hover:-translate-y-0.5 transition-all duration-300 disabled:opacity-50"
               >
                 {refundConfirmModal.sending ? (
                   <><i className="fas fa-spinner fa-spin mr-1"></i> Sending...</>
@@ -1333,7 +1451,7 @@ const handleCancelDayTourReservation = async () => {
             <div className="flex gap-3 justify-center">
               <button
                 onClick={() => setMoveDateConfirmModal({ show: false, booking: null, sending: false })}
-                className="px-5 py-2 border border-ocean-light/20 rounded-xl text-textSecondary text-sm font-medium hover:bg-ocean-ice transition-all duration-300"
+                className="px-4 py-2 border border-ocean-light/20 rounded-xl text-textSecondary text-sm font-medium hover:bg-ocean-ice transition-all duration-300"
                 disabled={moveDateConfirmModal.sending}
               >
                 Cancel
@@ -1341,7 +1459,7 @@ const handleCancelDayTourReservation = async () => {
               <button
                 onClick={() => handleMoveDateNotify(moveDateConfirmModal.booking)}
                 disabled={moveDateConfirmModal.sending}
-                className="px-5 py-2 bg-gradient-to-r from-blue-500 to-blue-600 rounded-xl text-white text-sm font-medium hover:shadow-lg hover:-translate-y-0.5 transition-all duration-300 disabled:opacity-50"
+                className="px-4 py-2 bg-gradient-to-r from-blue-500 to-blue-600 rounded-xl text-white text-sm font-medium hover:shadow-lg hover:-translate-y-0.5 transition-all duration-300 disabled:opacity-50"
               >
                 {moveDateConfirmModal.sending ? (
                   <><i className="fas fa-spinner fa-spin mr-1"></i> Sending...</>

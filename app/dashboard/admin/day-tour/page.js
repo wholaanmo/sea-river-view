@@ -453,6 +453,8 @@ if (!activeToursSnapshot.empty) {
       });
       
       showNotification(`Day tour has been archived successfully!`);
+      // Reflect removal immediately in this view while listeners settle.
+      setDayTour(null);
       setConfirmArchiveModal({ show: false, tour: null });
     } catch (error) {
       console.error('Error archiving day tour:', error);

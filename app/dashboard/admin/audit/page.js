@@ -3,12 +3,14 @@
 
 import { useState, useEffect } from 'react';
 import { db } from '../../../../lib/firebase';
-import { collection, query, orderBy, limit, getDocs, startAfter, onSnapshot } from 'firebase/firestore';
+import { collection, query, orderBy, limit, getDocs, startAfter, onSnapshot, where } from 'firebase/firestore';
 
 export default function AuditLogs() {
   const [logs, setLogs] = useState([]);
   const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
+  const [selectedDateFilter, setSelectedDateFilter] = useState('');
+  const [dateFilteredLogs, setDateFilteredLogs] = useState([]);
   const [notification, setNotification] = useState({ show: false, message: '', type: '' });
   
   // Pagination
@@ -47,6 +49,40 @@ export default function AuditLogs() {
     
     return () => unsubscribe();
   }, []);
+
+  // When a date filter is selected, fetch ALL logs for that specific date range in real time.
+  useEffect(() => {
+    if (!selectedDateFilter) {
+      setDateFilteredLogs([]);
+      return;
+    }
+    const [year, month, day] = selectedDateFilter.split('-').map(Number);
+    const start = new Date(year, month - 1, day, 0, 0, 0, 0);
+    const end = new Date(year, month - 1, day + 1, 0, 0, 0, 0);
+    const logsRef = collection(db, 'auditLogs');
+    const q = query(
+      logsRef,
+      where('timestamp', '>=', start),
+      where('timestamp', '<', end),
+      orderBy('timestamp', 'desc')
+    );
+    const unsubscribe = onSnapshot(q, (querySnapshot) => {
+      const logsList = [];
+      querySnapshot.forEach((docSnap) => {
+        logsList.push({
+          id: docSnap.id,
+          ...docSnap.data()
+        });
+      });
+      setDateFilteredLogs(logsList);
+      setLoading(false);
+    }, (error) => {
+      console.error('Error fetching date-filtered audit logs:', error);
+      setNotification({ show: true, message: 'Failed to load date-filtered logs.', type: 'error' });
+      setLoading(false);
+    });
+    return () => unsubscribe();
+  }, [selectedDateFilter]);
 
   // Auto-hide notification
   useEffect(() => {
@@ -95,16 +131,17 @@ export default function AuditLogs() {
     }
   };
 
-  const filteredLogs = logs.filter(log => {
-    if (!searchTerm) return true;
-    
+  const logsSource = selectedDateFilter ? dateFilteredLogs : logs;
+
+  const filteredLogs = logsSource.filter(log => {
     const searchLower = searchTerm.toLowerCase();
-    return (
+    const matchesSearch = !searchTerm || (
       log.userName?.toLowerCase().includes(searchLower) ||
       log.userRole?.toLowerCase().includes(searchLower) ||
       log.module?.toLowerCase().includes(searchLower) ||
       log.details?.toLowerCase().includes(searchLower)
     );
+    return matchesSearch;
   });
 
   const formatTimestamp = (timestamp) => {
@@ -146,9 +183,9 @@ export default function AuditLogs() {
         </p>
       </div>
 
-      {/* Search Input */}
-      <div className="mb-6">
-        <div className="relative w-full">
+      {/* Search + Date Filter */}
+      <div className="mb-6 grid grid-cols-1 md:grid-cols-3 gap-3">
+        <div className="relative w-full md:col-span-2">
           <i className="fas fa-search absolute left-3 top-1/2 -translate-y-1/2 text-neutral text-sm"></i>
           <input
             type="text"
@@ -165,6 +202,14 @@ export default function AuditLogs() {
               <i className="fas fa-times"></i>
             </button>
           )}
+        </div>
+        <div className="relative w-full">
+          <input
+            type="date"
+            value={selectedDateFilter}
+            onChange={(e) => setSelectedDateFilter(e.target.value)}
+            className="w-full px-3 py-2.5 border border-ocean-light/20 rounded-xl text-sm focus:outline-none focus:border-ocean-light focus:ring-2 focus:ring-ocean-light/20 transition-all duration-300 bg-white"
+          />
         </div>
       </div>
 
@@ -231,7 +276,7 @@ export default function AuditLogs() {
           </div>
 
           {/* Load More Button */}
-          {hasMore && filteredLogs.length > 0 && (
+          {!selectedDateFilter && hasMore && filteredLogs.length > 0 && (
             <div className="p-4 text-center border-t border-ocean-light/10">
               <button
                 onClick={loadMore}

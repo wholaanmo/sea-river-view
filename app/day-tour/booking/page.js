@@ -62,23 +62,44 @@ export default function DayTourBooking() {
 
   // Fetch payment settings
   useEffect(() => {
-    const fetchPaymentSettings = async () => {
-      try {
-        const settingsRef = doc(db, 'settings', 'payment');
-        const settingsDoc = await getDoc(settingsRef);
-        if (settingsDoc.exists()) {
-          const data = settingsDoc.data();
-          setPaymentSettings({
-            gcashQRCode: data.gcashQRCode || '',
-            bankAccounts: data.bankAccounts || []
-          });
-        }
-      } catch (error) {
-        console.error('Error fetching payment settings:', error);
+    const settingsRef = doc(db, 'settings', 'payment');
+    const unsubscribeSettings = onSnapshot(
+      settingsRef,
+      (settingsDoc) => {
+        const data = settingsDoc.exists() ? settingsDoc.data() : {};
+        setPaymentSettings((prev) => ({
+          ...prev,
+          gcashQRCode: data.gcashQRCode || ''
+        }));
+      },
+      (error) => {
+        console.error('Error listening to payment settings:', error);
       }
+    );
+
+    const bankAccountsRef = collection(db, 'bank_accounts');
+    const bankAccountsQuery = query(bankAccountsRef, where('archived', '==', false));
+    const unsubscribeBankAccounts = onSnapshot(
+      bankAccountsQuery,
+      (snapshot) => {
+        const activeBankAccounts = [];
+        snapshot.forEach((docSnap) => {
+          activeBankAccounts.push(docSnap.data());
+        });
+        setPaymentSettings((prev) => ({
+          ...prev,
+          bankAccounts: activeBankAccounts
+        }));
+      },
+      (error) => {
+        console.error('Error listening to bank accounts:', error);
+      }
+    );
+
+    return () => {
+      unsubscribeSettings();
+      unsubscribeBankAccounts();
     };
-    
-    fetchPaymentSettings();
   }, []);
 
   // Real-time listener for bank request status updates

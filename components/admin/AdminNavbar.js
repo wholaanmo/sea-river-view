@@ -13,6 +13,14 @@ export default function AdminNavbar({ toggleSidebar, sidebarOpen }) {
   const [showNotifications, setShowNotifications] = useState(false);
   const [notifications, setNotifications] = useState([]);
 
+  const asDate = (value) => {
+    if (!value) return new Date(0);
+    if (typeof value?.toDate === 'function') return value.toDate();
+    if (typeof value?.seconds === 'number') return new Date(value.seconds * 1000);
+    const d = new Date(value);
+    return Number.isNaN(d.getTime()) ? new Date(0) : d;
+  };
+
   useEffect(() => {
     const fetchUserData = async () => {
       try {
@@ -51,18 +59,115 @@ export default function AdminNavbar({ toggleSidebar, sidebarOpen }) {
           createdAt: data.createdAt,
           read: isRead,
           roomType: data.roomType,
-          bookingId: data.bookingId
+          bookingId: data.bookingId,
+          selectedBank: data.requestedBank?.bankName || 'N/A'
         });
       });
       setNotifications(prev => {
         const combined = [...prev.filter(n => n.type !== 'bank_transfer'), ...requests];
-        combined.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+        combined.sort((a, b) => asDate(b.createdAt) - asDate(a.createdAt));
         return combined;
       });
     }, (error) => {
       console.error('Error fetching bank transfer requests:', error);
     });
     
+    return () => unsubscribe();
+  }, []);
+
+  // Real-time listener for day tour bank transfer requests
+  useEffect(() => {
+    const dayTourBankRequestsRef = collection(db, 'daytour_bank_requests');
+    const q = query(dayTourBankRequestsRef, orderBy('createdAt', 'desc'));
+
+    const unsubscribe = onSnapshot(q, (querySnapshot) => {
+      const requests = [];
+      querySnapshot.forEach((docSnap) => {
+        const data = docSnap.data();
+        const isRead = data.read === true;
+        requests.push({
+          id: docSnap.id,
+          type: 'bank_transfer_daytour',
+          guestName: data.guestName,
+          createdAt: data.createdAt,
+          read: isRead,
+          bookingId: data.bookingId,
+          selectedDate: data.selectedDate,
+          selectedBank: data.requestedBank?.bankName || 'N/A'
+        });
+      });
+      setNotifications((prev) => {
+        const combined = [...prev.filter((n) => n.type !== 'bank_transfer_daytour'), ...requests];
+        combined.sort((a, b) => asDate(b.createdAt) - asDate(a.createdAt));
+        return combined;
+      });
+    }, (error) => {
+      console.error('Error fetching day tour bank transfer requests:', error);
+    });
+
+    return () => unsubscribe();
+  }, []);
+
+  // Real-time listener for new room reservations
+  useEffect(() => {
+    const bookingsRef = collection(db, 'bookings');
+    const q = query(bookingsRef, orderBy('createdAt', 'desc'));
+
+    const unsubscribe = onSnapshot(q, (querySnapshot) => {
+      const reservationNotifications = [];
+      querySnapshot.forEach((docSnap) => {
+        const data = docSnap.data();
+        if (data.type !== 'room') return;
+        reservationNotifications.push({
+          id: docSnap.id,
+          type: 'reservation_room',
+          guestName: `${data.guestInfo?.firstName || ''} ${data.guestInfo?.lastName || ''}`.trim() || 'Guest',
+          bookingId: data.bookingId,
+          roomType: data.roomType || 'N/A',
+          createdAt: data.createdAt,
+          read: data.read === true
+        });
+      });
+      setNotifications((prev) => {
+        const combined = [...prev.filter((n) => n.type !== 'reservation_room'), ...reservationNotifications];
+        combined.sort((a, b) => asDate(b.createdAt) - asDate(a.createdAt));
+        return combined;
+      });
+    }, (error) => {
+      console.error('Error fetching room reservations notifications:', error);
+    });
+
+    return () => unsubscribe();
+  }, []);
+
+  // Real-time listener for new day tour reservations
+  useEffect(() => {
+    const dayTourRef = collection(db, 'dayTourBookings');
+    const q = query(dayTourRef, orderBy('createdAt', 'desc'));
+
+    const unsubscribe = onSnapshot(q, (querySnapshot) => {
+      const reservationNotifications = [];
+      querySnapshot.forEach((docSnap) => {
+        const data = docSnap.data();
+        reservationNotifications.push({
+          id: docSnap.id,
+          type: 'reservation_daytour',
+          guestName: `${data.guestInfo?.firstName || ''} ${data.guestInfo?.lastName || ''}`.trim() || 'Guest',
+          bookingId: data.bookingId,
+          reservationDate: data.selectedDate || 'N/A',
+          createdAt: data.createdAt,
+          read: data.read === true
+        });
+      });
+      setNotifications((prev) => {
+        const combined = [...prev.filter((n) => n.type !== 'reservation_daytour'), ...reservationNotifications];
+        combined.sort((a, b) => asDate(b.createdAt) - asDate(a.createdAt));
+        return combined;
+      });
+    }, (error) => {
+      console.error('Error fetching day tour reservation notifications:', error);
+    });
+
     return () => unsubscribe();
   }, []);
 
@@ -82,13 +187,14 @@ export default function AdminNavbar({ toggleSidebar, sidebarOpen }) {
           guestName: data.guestName,
           bookingId: data.bookingId,
           roomType: data.roomType,
+          selectedDate: data.selectedDate || data.reservationDate || data.date,
           createdAt: data.cancelledAt,
           read: isRead,
         });
       });
       setNotifications(prev => {
         const combined = [...prev.filter(n => n.type !== 'cancellation'), ...cancellations];
-        combined.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+        combined.sort((a, b) => asDate(b.createdAt) - asDate(a.createdAt));
         return combined;
       });
     }, (error) => {
@@ -109,7 +215,11 @@ export default function AdminNavbar({ toggleSidebar, sidebarOpen }) {
     if (notification.read) return;
 
     try {
-      const collectionName = notification.type === 'bank_transfer' ? 'bank_requests' : 'guest_cancellations';
+      let collectionName = 'guest_cancellations';
+      if (notification.type === 'bank_transfer') collectionName = 'bank_requests';
+      if (notification.type === 'bank_transfer_daytour') collectionName = 'daytour_bank_requests';
+      if (notification.type === 'reservation_room') collectionName = 'bookings';
+      if (notification.type === 'reservation_daytour') collectionName = 'dayTourBookings';
       const docRef = doc(db, collectionName, notification.id);
       await updateDoc(docRef, { read: true });
     } catch (error) {
@@ -140,6 +250,36 @@ export default function AdminNavbar({ toggleSidebar, sidebarOpen }) {
         const data = doc.data();
         if (data.read !== true) {
           batch.update(doc.ref, { read: true });
+        }
+      });
+
+      // Mark room reservation notifications as read
+      const bookingsRef = collection(db, 'bookings');
+      const bookingsSnapshot = await getDocs(query(bookingsRef));
+      bookingsSnapshot.forEach((docSnap) => {
+        const data = docSnap.data();
+        if (data.type === 'room' && data.read !== true) {
+          batch.update(docSnap.ref, { read: true });
+        }
+      });
+
+      // Mark day tour reservation notifications as read
+      const dayTourBookingsRef = collection(db, 'dayTourBookings');
+      const dayTourSnapshot = await getDocs(query(dayTourBookingsRef));
+      dayTourSnapshot.forEach((docSnap) => {
+        const data = docSnap.data();
+        if (data.read !== true) {
+          batch.update(docSnap.ref, { read: true });
+        }
+      });
+
+      // Mark day tour bank requests as read
+      const dayTourBankRef = collection(db, 'daytour_bank_requests');
+      const dayTourBankSnapshot = await getDocs(query(dayTourBankRef));
+      dayTourBankSnapshot.forEach((docSnap) => {
+        const data = docSnap.data();
+        if (data.read !== true) {
+          batch.update(docSnap.ref, { read: true });
         }
       });
       
@@ -225,23 +365,65 @@ export default function AdminNavbar({ toggleSidebar, sidebarOpen }) {
                       >
                         <div className="flex items-start gap-3">
                           <div className={`w-8 h-8 rounded-full flex items-center justify-center flex-shrink-0 ${
-                            notification.type === 'bank_transfer' ? 'bg-amber-100' : 'bg-red-100'
+                            notification.type === 'cancellation' ? 'bg-red-100' : 'bg-amber-100'
                           }`}>
                             <i className={`${
-                              notification.type === 'bank_transfer' ? 'fas fa-university text-amber-600' : 'fas fa-times-circle text-red-600'
+                              notification.type === 'cancellation'
+                                ? 'fas fa-times-circle text-red-600'
+                                : notification.type === 'reservation_room'
+                                ? 'fas fa-bed text-amber-600'
+                                : notification.type === 'reservation_daytour'
+                                ? 'fas fa-sun text-amber-600'
+                                : 'fas fa-university text-amber-600'
                             } text-sm`}></i>
                           </div>
                           <div className="flex-1">
                             {notification.type === 'bank_transfer' ? (
                               <>
                                 <p className="text-sm font-semibold text-textPrimary">
-                                  Bank Transfer Request
+                                  Room Bank Transfer Request
                                 </p>
                                 <p className="text-xs text-textSecondary mt-1">
                                   {notification.guestName} requested bank transfer for {notification.roomType || 'room'}
                                 </p>
                                 <p className="text-xs text-ocean-mid mt-1 font-medium">
-                                  ₱{notification.totalPrice?.toLocaleString()}
+                                  Selected Bank: {notification.selectedBank}
+                                </p>
+                              </>
+                            ) : notification.type === 'bank_transfer_daytour' ? (
+                              <>
+                                <p className="text-sm font-semibold text-textPrimary">
+                                  Day Tour Bank Transfer Request
+                                </p>
+                                <p className="text-xs text-textSecondary mt-1">
+                                  {notification.guestName} | Booking ID: {notification.bookingId}
+                                </p>
+                                <p className="text-xs text-ocean-mid mt-1 font-medium">
+                                  Selected Bank: {notification.selectedBank}
+                                </p>
+                              </>
+                            ) : notification.type === 'reservation_room' ? (
+                              <>
+                                <p className="text-sm font-semibold text-textPrimary">
+                                  Room Reservation
+                                </p>
+                                <p className="text-xs text-textSecondary mt-1">
+                                  {notification.guestName} | Booking ID: {notification.bookingId}
+                                </p>
+                                <p className="text-xs text-ocean-mid mt-1 font-medium">
+                                  Room Type: {notification.roomType}
+                                </p>
+                              </>
+                            ) : notification.type === 'reservation_daytour' ? (
+                              <>
+                                <p className="text-sm font-semibold text-textPrimary">
+                                  Day Tour Reservation
+                                </p>
+                                <p className="text-xs text-textSecondary mt-1">
+                                  {notification.guestName} | Booking ID: {notification.bookingId}
+                                </p>
+                                <p className="text-xs text-ocean-mid mt-1 font-medium">
+                                  Date: {notification.reservationDate}
                                 </p>
                               </>
                             ) : (
@@ -250,12 +432,17 @@ export default function AdminNavbar({ toggleSidebar, sidebarOpen }) {
                                   Guest Cancellation
                                 </p>
                                 <p className="text-xs text-textSecondary mt-1">
-                                  {notification.guestName} cancelled reservation {notification.bookingId} ({notification.roomType})
+                                  {notification.guestName} cancelled reservation {notification.bookingId} ({notification.roomType || 'day tour'})
                                 </p>
+                                {notification.roomType === 'daytour' && (
+                                  <p className="text-xs text-ocean-mid mt-1 font-medium">
+                                    Date: {notification.selectedDate || 'N/A'}
+                                  </p>
+                                )}
                               </>
                             )}
                             <p className="text-xs text-gray-400 mt-1">
-                              {new Date(notification.createdAt).toLocaleString()}
+                              {asDate(notification.createdAt).toLocaleString()}
                             </p>
                           </div>
                         </div>

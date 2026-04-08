@@ -117,23 +117,44 @@ export default function BookingPage() {
   }, [roomId]);
 
   useEffect(() => {
-    const fetchPaymentSettings = async () => {
-      try {
-        const settingsRef = doc(db, 'settings', 'payment');
-        const settingsDoc = await getDoc(settingsRef);
-        if (settingsDoc.exists()) {
-          const data = settingsDoc.data();
-          setPaymentSettings({
-            gcashQRCode: data.gcashQRCode || '',
-            bankAccounts: data.bankAccounts || []
-          });
-        }
-      } catch (error) {
-        console.error('Error fetching payment settings:', error);
+    const settingsRef = doc(db, 'settings', 'payment');
+    const unsubscribeSettings = onSnapshot(
+      settingsRef,
+      (settingsDoc) => {
+        const data = settingsDoc.exists() ? settingsDoc.data() : {};
+        setPaymentSettings((prev) => ({
+          ...prev,
+          gcashQRCode: data.gcashQRCode || ''
+        }));
+      },
+      (error) => {
+        console.error('Error listening to payment settings:', error);
       }
+    );
+
+    const bankAccountsRef = collection(db, 'bank_accounts');
+    const bankAccountsQuery = query(bankAccountsRef, where('archived', '==', false));
+    const unsubscribeBankAccounts = onSnapshot(
+      bankAccountsQuery,
+      (snapshot) => {
+        const activeBankAccounts = [];
+        snapshot.forEach((docSnap) => {
+          activeBankAccounts.push(docSnap.data());
+        });
+        setPaymentSettings((prev) => ({
+          ...prev,
+          bankAccounts: activeBankAccounts
+        }));
+      },
+      (error) => {
+        console.error('Error listening to bank accounts:', error);
+      }
+    );
+
+    return () => {
+      unsubscribeSettings();
+      unsubscribeBankAccounts();
     };
-    
-    fetchPaymentSettings();
   }, []);
 
   // Also listen for bank details provided for this booking
@@ -589,6 +610,16 @@ export default function BookingPage() {
       year: 'numeric', 
       month: 'long', 
       day: 'numeric'
+    });
+  };
+
+  const formatTimeOnly = (date) => {
+    if (!date) return '';
+    const dateObj = date instanceof Date ? date : new Date(date);
+    return dateObj.toLocaleTimeString('en-US', {
+      hour: 'numeric',
+      minute: '2-digit',
+      hour12: true
     });
   };
 
@@ -1224,7 +1255,7 @@ export default function BookingPage() {
                         </p>
                         <p className="text-sm text-ocean-mid font-medium mt-1">
                           <i className="fas fa-clock mr-1"></i>
-                          {formatDateTime(bookingData.checkIn).split('at')[1]?.trim() || ''}
+                          {formatTimeOnly(bookingData.checkIn)}
                         </p>
                         {bookingData.checkOut && (
                           <p className="text-xs text-textSecondary mt-2">

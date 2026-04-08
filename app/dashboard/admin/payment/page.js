@@ -39,6 +39,7 @@ export default function AdminPaymentPage() {
   const [selectedBankForRequest, setSelectedBankForRequest] = useState(null);
   const [showArchiveQRModal, setShowArchiveQRModal] = useState(false);
   const [archivingQR, setArchivingQR] = useState(false);
+  const [requestsSearchTerm, setRequestsSearchTerm] = useState('');
 
   // Fetch payment settings
  useEffect(() => {
@@ -565,6 +566,40 @@ const handleArchiveBankAccount = async () => {
   // Filter out archived bank accounts from display
   const activeBankAccounts = bankAccounts.filter(account => !account.archived);
 
+  const normalizeDateText = (value) => {
+    if (!value) return '';
+    const d = new Date(value);
+    if (Number.isNaN(d.getTime())) return String(value).toLowerCase();
+    return `${d.toLocaleDateString()} ${d.toLocaleString()}`.toLowerCase();
+  };
+
+  const roomRequestsFiltered = bankTransferRequests.filter((request) => {
+    const q = requestsSearchTerm.trim().toLowerCase();
+    if (!q) return true;
+    return (
+      String(request.guestName || '').toLowerCase().includes(q) ||
+      String(request.guestEmail || '').toLowerCase().includes(q) ||
+      String(request.requestedBank?.bankName || '').toLowerCase().includes(q) ||
+      String(request.requestedBank?.accountName || '').toLowerCase().includes(q) ||
+      String(request.requestedBank?.accountNumber || '').toLowerCase().includes(q) ||
+      normalizeDateText(request.createdAt).includes(q)
+    );
+  });
+
+  const dayTourRequestsFiltered = dayTourBankRequests.filter((request) => {
+    const q = requestsSearchTerm.trim().toLowerCase();
+    if (!q) return true;
+    return (
+      String(request.guestName || '').toLowerCase().includes(q) ||
+      String(request.guestEmail || '').toLowerCase().includes(q) ||
+      String(request.requestedBank?.bankName || '').toLowerCase().includes(q) ||
+      String(request.requestedBank?.accountName || '').toLowerCase().includes(q) ||
+      String(request.requestedBank?.accountNumber || '').toLowerCase().includes(q) ||
+      String(request.selectedDate || '').toLowerCase().includes(q) ||
+      normalizeDateText(request.createdAt).includes(q)
+    );
+  });
+
   if (loading) {
     return (
       <div className="p-8 min-h-screen" style={{ backgroundColor: 'var(--color-blue-white)' }}>
@@ -786,19 +821,32 @@ const handleArchiveBankAccount = async () => {
             )}
           </button>
         </div>
+
+        <div className="px-6 pt-4">
+          <div className="relative max-w-md">
+            <i className="fas fa-search absolute left-3 top-1/2 -translate-y-1/2 text-neutral text-sm"></i>
+            <input
+              type="text"
+              value={requestsSearchTerm}
+              onChange={(e) => setRequestsSearchTerm(e.target.value)}
+              placeholder="Search by name, email, bank account, or date"
+              className="w-full pl-9 pr-3 py-2.5 border border-ocean-light/20 rounded-xl text-sm focus:outline-none focus:border-ocean-light bg-white"
+            />
+          </div>
+        </div>
         
         <div className="p-6">
           {/* Room Bookings Requests */}
           {activeRequestsTab === 'room' && (
             <>
-              {bankTransferRequests.length === 0 ? (
+              {roomRequestsFiltered.length === 0 ? (
                 <div className="text-center py-12">
                   <i className="fas fa-check-circle text-5xl text-green-300 mb-3"></i>
                   <p className="text-textSecondary">No bank transfer requests for room bookings</p>
                 </div>
               ) : (
                 <div className="space-y-4">
-                  {bankTransferRequests.map((request) => {
+                  {roomRequestsFiltered.map((request) => {
                     const isCompleted = request.status === 'completed';
                     const isNew = !viewedRoomRequests.has(request.id);
                     // Remove orange border once bank details have been provided
@@ -875,14 +923,14 @@ const handleArchiveBankAccount = async () => {
           {/* Day Tour Bookings Requests */}
           {activeRequestsTab === 'daytour' && (
             <>
-              {dayTourBankRequests.length === 0 ? (
+              {dayTourRequestsFiltered.length === 0 ? (
                 <div className="text-center py-12">
                   <i className="fas fa-sun text-5xl text-amber-300 mb-3"></i>
                   <p className="text-textSecondary">No bank transfer requests for day tour bookings</p>
                 </div>
               ) : (
                 <div className="space-y-4">
-                  {dayTourBankRequests.map((request) => {
+                  {dayTourRequestsFiltered.map((request) => {
                     const isCompleted = request.status === 'completed';
                     const isNew = !viewedDayTourRequests.has(request.id);
                     // Remove orange border once bank details have been provided
